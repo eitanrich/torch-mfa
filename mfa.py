@@ -20,13 +20,13 @@ class MFA(torch.nn.Module):
         self.PI = torch.nn.Parameter(torch.ones(n_components)/float(n_components), requires_grad=False)
         # self.PI_logits = torch.nn.Parameter(torch.zeros(n_components))
 
-    def fit(self, x):
-        """
-        EM Training
-        :param x:
-        :return:
-        """
-        pass
+    # def fit(self, x):
+    #     """
+    #     EM Training
+    #     :param x:
+    #     :return:
+    #     """
+    #     pass
 
     def log_responsibilities(self, x):
         pass
@@ -62,10 +62,45 @@ class MFA(torch.nn.Module):
         log_det_Sigma = det_L - torch.sum(torch.log(iD.reshape(K, d)), axis=1)
         log_prob_data_given_components = -0.5 * ((d*np.log(2.0*math.pi) + log_det_Sigma).reshape(K, 1) + m_d)
         # component_log_probs = (torch.log(torch.softmax(self.PI_logits)), [K, 1])
-        return self.PI.reshape(K, 1) + log_prob_data_given_components
+        return self.PI.reshape(1, K) + log_prob_data_given_components.T
 
     def log_prob(self, x):
-        return torch.logsumexp(self.per_component_log_likelihood(x), dim=0)
+        return torch.logsumexp(self.per_component_log_likelihood(x), dim=1)
+
+    def log_responsibilities(self, x):
+        comp_LLs = self.per_component_log_likelihood(x)
+        return comp_LLs - torch.logsumexp(comp_LLs, dim=1).reshape(-1, 1)
+
+    def responsibilities(self, x):
+        return torch.exp(self.log_responsibilities(x))
+
+    def fit(self, x, max_iterations=100):
+        K, d, l = self.A.shape
+        N = x.shape[0]
+
+        # TODO: Init
+
+        def per_component_m_step(i):
+            mu_i = torch.sum(r[:, [i]] * x, dim=0) / sum_r[i]
+            s2_I = torch.pow(self.D[i, 0], 2.0) * torch.eye(l)
+            inv_M_i = torch.inverse(self.A[i].T @ self.A[i] + s2_I)
+            x_c = x - mu_i.reshape(1, d)
+            SiAi = (1.0/sum_r[i]) * (r[:, [i]]*x_c).T @ (x_c @ self.A[i])
+            invM_AT_Si_Ai = inv_M_i @ self.A[i].T @ SiAi
+            A_i_new = SiAi @ torch.inverse(s2_I + invM_AT_Si_Ai)
+            t1 = torch.trace(A_i_new.T @ (SiAi @ inv_M_i))
+            trace_S_i = torch.sum(N/sum_r[i] * torch.mean(r[:, [i]]*x_c*x_c, dim=0))
+            sigma_2_new = (trace_S_i - t1)/d
+            return mu_i, A_i_new, torch.sqrt(sigma_2_new) * torch.ones(d)
+
+        for it in range(max_iterations):
+            r = self.responsibilities(x)
+            sum_r = torch.sum(r, dim=0)
+            print('Iteration', it)
+            new_params = [torch.stack(t) for t in zip(*[per_component_m_step(i) for i in range(K)])]
+            self.MU.data = new_params[0]
+            self.A.data = new_params[1]
+            self.D.data = new_params[2]
 
 # Some unit testing...
 if __name__ == '__main__':
@@ -77,13 +112,25 @@ if __name__ == '__main__':
     mfa.D[0] = torch.FloatTensor([0.1, 0.1])
     mfa.D[1] = torch.FloatTensor([0.2, 0.2])
 
+    # samples, labels = mfa.sample(10)
+    # log_probs = mfa.log_prob(samples)
+    # lls = mfa.per_component_log_likelihood(samples)
+    # r = mfa.responsibilities(samples)
+    # print(samples.shape, lls.shape, r.shape)
+    # print(log_probs)
+    # print(labels)
+    # print(lls[:, 0]-lls[:, 1])
+    # print(r)
 
-    samples, labels = mfa.sample(10)
-    lls = mfa.per_component_log_likelihood(samples)
-    print(labels)
-    print(lls[0]-lls[1])
-
-    # samples, _ = mfa.sample(1000)
+    samples, _ = mfa.sample(1000)
     # samples = samples.numpy()
     # plt.plot(samples[:, 0], samples[:, 1], '.', alpha=0.5)
     # plt.show()
+
+    mfa.fit(samples)
+
+    samples, _ = mfa.sample(1000)
+    samples = samples.numpy()
+    plt.plot(samples[:, 0], samples[:, 1], '.', alpha=0.5)
+    plt.show()
+
