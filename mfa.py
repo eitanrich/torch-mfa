@@ -78,7 +78,7 @@ class MFA(torch.nn.Module):
         K, d, l = self.A.shape
         N = x.shape[0]
 
-        # TODO: Init
+        self._init_from_data(x)
 
         def per_component_m_step(i):
             mu_i = torch.sum(r[:, [i]] * x, dim=0) / sum_r[i]
@@ -101,6 +101,30 @@ class MFA(torch.nn.Module):
             self.MU.data = new_params[0]
             self.A.data = new_params[1]
             self.D.data = new_params[2]
+
+    @staticmethod
+    def _small_sample_ppca(x, n_factors):
+        # See https://stats.stackexchange.com/questions/134282/relationship-between-svd-and-pca-how-to-use-svd-to-perform-pca
+        mu = torch.mean(x, dim=0)
+        U, S, V = torch.svd(x - mu.reshape(1, -1))
+        sigma_squared = torch.sum(torch.pow(S[n_factors:], 2.0))/(x.shape[1]-n_factors)
+        A = V[:, :n_factors] * torch.sqrt((torch.pow(S[:n_factors], 2.0).reshape(1, n_factors)/(x.shape[0]-1) - sigma_squared))
+        return mu, A, torch.sqrt(sigma_squared) * torch.ones(x.shape[1])
+
+    def _init_from_data(self, x):
+        assert self.init_method == 'rnd_samples'
+
+        K = self.n_components
+        n = x.shape[0]
+        l = self.n_factors
+        m = l*2     # number of samples per component
+        params = [torch.stack(t) for t in zip(
+            *[MFA._small_sample_ppca(x[np.random.choice(n, size=m, replace=False)], n_factors=l) for i in range(K)])]
+
+        self.MU.data = params[0]
+        self.A.data = params[1]
+        self.D.data = params[2]
+
 
 # Some unit testing...
 if __name__ == '__main__':
@@ -127,9 +151,10 @@ if __name__ == '__main__':
     # plt.plot(samples[:, 0], samples[:, 1], '.', alpha=0.5)
     # plt.show()
 
-    mfa.fit(samples)
+    mfa2 = MFA(2, 2, 1)
+    mfa2.fit(samples)
 
-    samples, _ = mfa.sample(1000)
+    samples, _ = mfa2.sample(1000)
     samples = samples.numpy()
     plt.plot(samples[:, 0], samples[:, 1], '.', alpha=0.5)
     plt.show()
