@@ -48,7 +48,7 @@ class MFA(torch.nn.Module):
         A = self.A
         AT = A.permute(0, 2, 1)
         iD = torch.pow(self.D, -2.0).view(K, d, 1)
-        L = torch.eye(l).reshape(l, l, 1) + AT @ (iD*A)
+        L = torch.eye(l).reshape(1, l, l) + AT @ (iD*A)
         iL = torch.inverse(L)
 
         def per_component_md(i):
@@ -96,7 +96,10 @@ class MFA(torch.nn.Module):
         for it in range(max_iterations):
             r = self.responsibilities(x)
             sum_r = torch.sum(r, dim=0)
-            print('Iteration {}: log_likelihood = {}'.format(it, torch.mean(self.log_prob(x))))
+            if it%5 == 0:
+                print('Iteration {}: log_likelihood = {}'.format(it, torch.mean(self.log_prob(x))))
+            else:
+                print('Iteration {}'.format(it))
             new_params = [torch.stack(t) for t in zip(*[per_component_m_step(i) for i in range(K)])]
             self.MU.data = new_params[0]
             self.A.data = new_params[1]
