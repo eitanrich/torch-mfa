@@ -74,7 +74,7 @@ class MFA(torch.nn.Module):
     def responsibilities(self, x):
         return torch.exp(self.log_responsibilities(x))
 
-    def fit(self, x, max_iterations=100):
+    def fit(self, x, max_iterations=20):
         K, d, l = self.A.shape
         N = x.shape[0]
 
@@ -96,7 +96,7 @@ class MFA(torch.nn.Module):
         for it in range(max_iterations):
             r = self.responsibilities(x)
             sum_r = torch.sum(r, dim=0)
-            print('Iteration', it)
+            print('Iteration {}: log_likelihood = {}'.format(it, torch.mean(self.log_prob(x))))
             new_params = [torch.stack(t) for t in zip(*[per_component_m_step(i) for i in range(K)])]
             self.MU.data = new_params[0]
             self.A.data = new_params[1]
@@ -107,7 +107,7 @@ class MFA(torch.nn.Module):
         # See https://stats.stackexchange.com/questions/134282/relationship-between-svd-and-pca-how-to-use-svd-to-perform-pca
         mu = torch.mean(x, dim=0)
         U, S, V = torch.svd(x - mu.reshape(1, -1))
-        sigma_squared = torch.sum(torch.pow(S[n_factors:], 2.0))/(x.shape[1]-n_factors)
+        sigma_squared = torch.sum(torch.pow(S[n_factors:], 2.0))/((x.shape[0]-1) * (x.shape[1]-n_factors))
         A = V[:, :n_factors] * torch.sqrt((torch.pow(S[:n_factors], 2.0).reshape(1, n_factors)/(x.shape[0]-1) - sigma_squared))
         return mu, A, torch.sqrt(sigma_squared) * torch.ones(x.shape[1])
 
@@ -117,7 +117,7 @@ class MFA(torch.nn.Module):
         K = self.n_components
         n = x.shape[0]
         l = self.n_factors
-        m = l*2     # number of samples per component
+        m = (l+1)*2     # number of samples per component
         params = [torch.stack(t) for t in zip(
             *[MFA._small_sample_ppca(x[np.random.choice(n, size=m, replace=False)], n_factors=l) for i in range(K)])]
 
