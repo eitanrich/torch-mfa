@@ -34,9 +34,9 @@ class MFA(torch.nn.Module):
     def sample(self, n, with_noise=True):
         K, d, l = self.A.shape
         # c_nums = multinomial.Multinomial(total_count=n, probs=self.PI).sample().long()
-        c_nums = np.random.choice(K, n, p=self.PI.detach().numpy())
-        z_l = torch.randn(n, l)
-        z_d = torch.randn(n, d) if with_noise else torch.zeros(n, d)
+        c_nums = np.random.choice(K, n, p=self.PI.detach().cpu().numpy())
+        z_l = torch.randn(n, l, device=self.A.device)
+        z_d = torch.randn(n, d, device=self.A.device) if with_noise else torch.zeros(n, d, device=self.A.device)
         samples = torch.stack([self.A[c_nums[i]] @ z_l[i] + self.MU[c_nums[i]] + z_d[i] * self.D[c_nums[i]]
                                for i in range(n)])
         return samples, c_nums
@@ -48,7 +48,7 @@ class MFA(torch.nn.Module):
         A = self.A
         AT = A.permute(0, 2, 1)
         iD = torch.pow(self.D, -2.0).view(K, d, 1)
-        L = torch.eye(l).reshape(1, l, l) + AT @ (iD*A)
+        L = torch.eye(l, device=self.A.device).reshape(1, l, l) + AT @ (iD*A)
         iL = torch.inverse(L)
 
         def per_component_md(i):
@@ -82,7 +82,7 @@ class MFA(torch.nn.Module):
 
         def per_component_m_step(i):
             mu_i = torch.sum(r[:, [i]] * x, dim=0) / sum_r[i]
-            s2_I = torch.pow(self.D[i, 0], 2.0) * torch.eye(l)
+            s2_I = torch.pow(self.D[i, 0], 2.0) * torch.eye(l, device=x.device)
             inv_M_i = torch.inverse(self.A[i].T @ self.A[i] + s2_I)
             x_c = x - mu_i.reshape(1, d)
             SiAi = (1.0/sum_r[i]) * (r[:, [i]]*x_c).T @ (x_c @ self.A[i])
@@ -91,7 +91,7 @@ class MFA(torch.nn.Module):
             t1 = torch.trace(A_i_new.T @ (SiAi @ inv_M_i))
             trace_S_i = torch.sum(N/sum_r[i] * torch.mean(r[:, [i]]*x_c*x_c, dim=0))
             sigma_2_new = (trace_S_i - t1)/d
-            return mu_i, A_i_new, torch.sqrt(sigma_2_new) * torch.ones(d)
+            return mu_i, A_i_new, torch.sqrt(sigma_2_new) * torch.ones_like(self.D[i])
 
         for it in range(max_iterations):
             r = self.responsibilities(x)
@@ -112,7 +112,7 @@ class MFA(torch.nn.Module):
         U, S, V = torch.svd(x - mu.reshape(1, -1))
         sigma_squared = torch.sum(torch.pow(S[n_factors:], 2.0))/((x.shape[0]-1) * (x.shape[1]-n_factors))
         A = V[:, :n_factors] * torch.sqrt((torch.pow(S[:n_factors], 2.0).reshape(1, n_factors)/(x.shape[0]-1) - sigma_squared))
-        return mu, A, torch.sqrt(sigma_squared) * torch.ones(x.shape[1])
+        return mu, A, torch.sqrt(sigma_squared) * torch.ones(x.shape[1], device=x.device)
 
     def _init_from_data(self, x):
         assert self.init_method == 'rnd_samples'
@@ -158,7 +158,7 @@ if __name__ == '__main__':
     mfa2.fit(samples)
 
     samples, _ = mfa2.sample(1000)
-    samples = samples.numpy()
+    samples = samples.cpu().numpy()
     plt.plot(samples[:, 0], samples[:, 1], '.', alpha=0.5)
     plt.show()
 

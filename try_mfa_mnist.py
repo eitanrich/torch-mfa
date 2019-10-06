@@ -17,11 +17,13 @@ samples = samples.reshape(-1, 28*28)
 print(samples.shape, len(labels))
 
 mfa = MFA(n_components=n_components, n_features=28*28, n_factors=6)
-mfa.fit(samples, max_iterations=20)
-
+mfa.cuda()
+print('Fitting using EM...')
+mfa.fit(samples.cuda(), max_iterations=20)
+print('Visualizing...')
 n = 1000
 rnd_samples, c_nums = mfa.sample(n, with_noise=False)
-rnd_samples = rnd_samples.numpy()
+rnd_samples = rnd_samples.cpu().numpy()
 pkl.dump((rnd_samples, c_nums), open('samples.pkl', 'wb'))
 
 rnd_samples, c_nums = pkl.load(open('samples.pkl', 'rb'))
