@@ -132,8 +132,8 @@ class MFA(torch.nn.Module):
                 batch_r = self.responsibilities(batch_x)
                 mu_weighted_sum += torch.stack([torch.sum(batch_r[:, [i]] * batch_x, dim=0).double() for i in range(K)])
                 all_r.append(batch_r)
-                if len(all_r)==4:
-                    break
+                # if len(all_r)==4:
+                #     break
             all_r = torch.cat(all_r)
             print()
 
@@ -157,9 +157,9 @@ class MFA(torch.nn.Module):
                 # SA += torch.stack([(batch_r[:, [i]]*(batch_x-self.MU[i])).T @
                 #                           ((batch_x-self.MU[i]) @ self.A[i]) for i in range(K)])
                 # RXc += torch.stack([batch_r[:, [i]]*torch.pow(batch_x-self.MU[i], 2.0)  for i in range(K)])
-                if batch_num == 3:
-                    break
-
+                # if batch_num == 3:
+                #     break
+            SA /= r_sum.reshape(-1, 1, 1)
             # Step 3 - Finalize the EM step
             s2_I = torch.pow(self.D[:, 0], 2.0).reshape(K, 1, 1) * torch.eye(l, device=self.MU.device).reshape(1, l, l)
             inv_M = torch.inverse((self.A.transpose(1, 2) @ self.A + s2_I).double())   # (K, l, l)
