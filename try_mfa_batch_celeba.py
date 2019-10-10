@@ -13,4 +13,4 @@ model = MFA(n_components=n_components, n_features=64*64*3, n_factors=10)
 model.cuda()
 
 print('Fitting using EM...')
-model.batch_fit(train_set)
+model.batch_fit(train_set, max_iterations=10)

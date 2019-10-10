@@ -5,6 +5,7 @@ import math
 from matplotlib import pyplot as plt
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.data import RandomSampler
+import time
 
 #TODO: Rename to M PPCA and change D to be a scalar?
 
@@ -23,9 +24,6 @@ class MFA(torch.nn.Module):
         self.PI = torch.nn.Parameter(torch.ones(n_components)/float(n_components), requires_grad=False)
         # self.PI_logits = torch.nn.Parameter(torch.zeros(n_components))
 
-    def log_responsibilities(self, x):
-        pass
-
     def sample(self, n, with_noise=True):
         K, d, l = self.A.shape
         # c_nums = multinomial.Multinomial(total_count=n, probs=self.PI).sample().long()
@@ -41,7 +39,7 @@ class MFA(torch.nn.Module):
 
         # Create some temporary matrices to simplify calculations...
         A = self.A
-        AT = A.permute(0, 2, 1)
+        AT = A.transpose(1, 2)
         iD = torch.pow(self.D, -2.0).view(K, d, 1)
         L = torch.eye(l, device=self.A.device).reshape(1, l, l) + AT @ (iD*A)
         iL = torch.inverse(L)
@@ -125,7 +123,8 @@ class MFA(torch.nn.Module):
         loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
         for it in range(max_iterations):
 
-            print('\nIteration {} / {}:'.format(it, max_iterations))
+            t = time.time()
+            print('Iteration {} / {}:'.format(it, max_iterations))
             # Step 1: Fetch all data and calculate and store all responsibilities, calculate mu
             mu_weighted_sum = torch.zeros(size=[K, d], dtype=torch.float64, device=self.MU.device)
             all_r = []
@@ -136,7 +135,7 @@ class MFA(torch.nn.Module):
                 mu_weighted_sum += torch.stack([torch.sum(batch_r[:, [i]] * batch_x, dim=0).double() for i in range(K)])
                 all_r.append(batch_r)
             all_r = torch.cat(all_r)
-            print()
+            print(' ({} sec)'.format(time.time()-t))
 
             # Update MU
             r_sum = torch.sum(all_r, dim=0).double()
@@ -145,6 +144,7 @@ class MFA(torch.nn.Module):
             # Step 2 - Fetch all data again and Calculate all:
             # - SiAi - The empirical covariance matrices multiplied by the factors matrices
             # - Ri Xc^2 - The weighted empirical variance (for the noise variance calculation)
+            t = time.time()
             SA = torch.zeros([K, d, l], dtype=torch.float64, device=self.MU.device)
             RXc = torch.zeros(K, dtype=torch.float64, device=self.MU.device)
             for batch_num, (batch_x, _) in enumerate(loader):
@@ -160,6 +160,8 @@ class MFA(torch.nn.Module):
                 #                           ((batch_x-self.MU[i]) @ self.A[i]) for i in range(K)])
                 # RXc += torch.stack([batch_r[:, [i]]*torch.pow(batch_x-self.MU[i], 2.0)  for i in range(K)])
             SA /= r_sum.reshape(-1, 1, 1)
+            print(' ({} sec)'.format(time.time()-t))
+
             # Step 3 - Finalize the EM step
             s2_I = torch.pow(self.D[:, 0], 2.0).reshape(K, 1, 1) * torch.eye(l, device=self.MU.device).reshape(1, l, l)
             inv_M = torch.inverse((self.A.transpose(1, 2) @ self.A + s2_I).double())   # (K, l, l)
