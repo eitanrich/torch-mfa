@@ -3,6 +3,10 @@ import torch
 from torch.distributions import multinomial
 import math
 from matplotlib import pyplot as plt
+from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import RandomSampler
+
+#TODO: Rename to M PPCA and change D to be a scalar?
 
 class MFA(torch.nn.Module):
     def __init__(self, n_components, n_features, n_factors, isotropic=True, init_method='rnd_samples'):
@@ -18,14 +22,6 @@ class MFA(torch.nn.Module):
         self.D = torch.nn.Parameter(torch.zeros(n_components, n_features), requires_grad=False)
         self.PI = torch.nn.Parameter(torch.ones(n_components)/float(n_components), requires_grad=False)
         # self.PI_logits = torch.nn.Parameter(torch.zeros(n_components))
-
-    # def fit(self, x):
-    #     """
-    #     EM Training
-    #     :param x:
-    #     :return:
-    #     """
-    #     pass
 
     def log_responsibilities(self, x):
         pass
@@ -74,37 +70,103 @@ class MFA(torch.nn.Module):
         return torch.exp(self.log_responsibilities(x))
 
     def fit(self, x, max_iterations=20):
+        """
+        Estimates Maximum Likelihood MPPCA parameters for the provided data using EM
+        :param x:
+        :param max_iterations:
+        :return:
+        """
         K, d, l = self.A.shape
         N = x.shape[0]
 
-        print('Random init...')
-        self._init_from_data(x)
+        self._init_from_data(x, samples_per_component=(l+1)*2)
 
         def per_component_m_step(i):
             mu_i = torch.sum(r[:, [i]] * x, dim=0) / sum_r[i]
             s2_I = torch.pow(self.D[i, 0], 2.0) * torch.eye(l, device=x.device)
-            inv_M_i = torch.inverse((self.A[i].T @ self.A[i] + s2_I).double())
+            inv_M_i = torch.inverse(self.A[i].T @ self.A[i] + s2_I)
             x_c = x - mu_i.reshape(1, d)
-            SiAi = ((1.0/sum_r[i]) * (r[:, [i]]*x_c).T @ (x_c @ self.A[i])).double()
-            invM_AT_Si_Ai = inv_M_i @ self.A[i].T.double() @ SiAi
-            A_i_new = SiAi @ torch.inverse((s2_I.double() + invM_AT_Si_Ai))
+            SiAi = (1.0/sum_r[i]) * (r[:, [i]]*x_c).T @ (x_c @ self.A[i])
+            invM_AT_Si_Ai = inv_M_i @ self.A[i].T @ SiAi
+            A_i_new = SiAi @ torch.inverse(s2_I + invM_AT_Si_Ai)
             t1 = torch.trace(A_i_new.T @ (SiAi @ inv_M_i))
-            trace_S_i = (torch.sum(N/sum_r[i] * torch.mean(r[:, [i]]*x_c*x_c, dim=0))).double()
+            trace_S_i = torch.sum(N/sum_r[i] * torch.mean(r[:, [i]]*x_c*x_c, dim=0))
             sigma_2_new = (trace_S_i - t1)/d
-            return mu_i, A_i_new.float(), torch.sqrt(sigma_2_new).float() * torch.ones_like(self.D[i])
+            return mu_i, A_i_new, torch.sqrt(sigma_2_new) * torch.ones_like(self.D[i])
 
-        print('Starting EM iterations...')
         for it in range(max_iterations):
             r = self.responsibilities(x)
             sum_r = torch.sum(r, dim=0)
-            # if it%5 == 0:
-            print('Iteration {}: log_likelihood = {}'.format(it, torch.mean(self.log_prob(x))))
-            # else:
-            #     print('Iteration {}'.format(it))
+            if it%5 == 0:
+                print('Iteration {}: log_likelihood = {}'.format(it, torch.mean(self.log_prob(x))))
+            else:
+                print('Iteration {}'.format(it))
             new_params = [torch.stack(t) for t in zip(*[per_component_m_step(i) for i in range(K)])]
             self.MU.data = new_params[0]
             self.A.data = new_params[1]
             self.D.data = new_params[2]
+
+    def batch_fit(self, dataset: Dataset, batch_size=1000, max_iterations=20):
+        """
+        Estimates Maximum Likelihood MPPCA parameters for the provided dataset using batched-EM.
+        Batching is performed on each step separately i.e. (E, E,.., E | M, M, ... M), (E, E,.., E | M, M, ... M), ...
+        i.e. Iteration 1 E step on entire data, Iteration 1 M step on entire data, Iteration 2 E step on entire data...
+        """
+        K, d, l = self.A.shape
+
+        # Initial guess
+        init_samples_per_component = (l+1)*2
+        init_keys = [key for i, key in enumerate(RandomSampler(dataset)) if i < init_samples_per_component*K]
+        init_samples, _ = zip(*[dataset[key] for key in init_keys])
+        self._init_from_data(torch.stack(init_samples), samples_per_component=init_samples_per_component)
+
+        loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+        for it in range(max_iterations):
+
+            print('\nIteration {} / {}:'.format(it, max_iterations))
+            # Step 1: Fetch all data and calculate and store all responsibilities, calculate mu
+            mu_weighted_sum = torch.zeros(size=[K, d], dtype=torch.float64)
+            all_r = []
+            for batch_x, _ in loader:
+                print('E', end='', flush=True)
+                batch_r = self.responsibilities(batch_x)
+                mu_weighted_sum += torch.stack([torch.sum(batch_r[:, [i]] * batch_x, dim=0).double() for i in range(K)])
+                all_r.append(batch_r)
+                # if len(all_r)==4:
+                #     break
+            all_r = torch.cat(all_r)
+            print()
+
+            # Update MU
+            r_sum = torch.sum(all_r, dim=0).double()
+            self.MU.data = (mu_weighted_sum / r_sum.reshape(-1, 1)).float()
+
+            # Step 2 - Fetch all data again and Calculate all:
+            # - SiAi - The empirical covariance matrices multiplied by the factors matrices
+            # - Ri Xc^2 - The weighted empirical variance (for the noise variance calculation)
+            SA = torch.zeros([K, d, l], dtype=torch.float64)
+            RXc = torch.zeros(K, dtype=torch.float64)
+            for batch_num, (batch_x, _) in enumerate(loader):
+                print('M', end='', flush=True)
+                batch_r = all_r[batch_num*batch_size: (batch_num+1)*batch_size]
+                for i in range(K):
+                    xc_i = batch_x-self.MU[i]
+                    SA[i] += ((batch_r[:, [i]] * xc_i).T @ (xc_i @ self.A[i])).double()
+                    RXc[i] += torch.sum(batch_r[:, [i]] * torch.pow(xc_i, 2.0)).double()
+                # Alternative implementation:
+                # SA += torch.stack([(batch_r[:, [i]]*(batch_x-self.MU[i])).T @
+                #                           ((batch_x-self.MU[i]) @ self.A[i]) for i in range(K)])
+                # RXc += torch.stack([batch_r[:, [i]]*torch.pow(batch_x-self.MU[i], 2.0)  for i in range(K)])
+                # if batch_num == 3:
+                #     break
+            SA /= r_sum.reshape(-1, 1, 1)
+            # Step 3 - Finalize the EM step
+            s2_I = torch.pow(self.D[:, 0], 2.0).reshape(K, 1, 1) * torch.eye(l, device=self.MU.device).reshape(1, l, l)
+            inv_M = torch.inverse((self.A.transpose(1, 2) @ self.A + s2_I).double())   # (K, l, l)
+            invM_AT_S_A = inv_M @ self.A.double().transpose(1, 2) @ SA   # (K, l, l)
+            self.A.data = (SA @ torch.inverse(s2_I.double() + invM_AT_S_A)).float()      # (K, d, l)
+            t1 = torch.stack([torch.trace(self.A[i].double().T @ (SA[i] @ inv_M[i])) for i in range(K)])
+            self.D.data = torch.sqrt((RXc / r_sum - t1)/d).float().reshape(-1, 1) * torch.ones_like(self.D)
 
     @staticmethod
     def _small_sample_ppca(x, n_factors):
@@ -115,20 +177,21 @@ class MFA(torch.nn.Module):
         A = V[:, :n_factors] * torch.sqrt((torch.pow(S[:n_factors], 2.0).reshape(1, n_factors)/(x.shape[0]-1) - sigma_squared))
         return mu, A, torch.sqrt(sigma_squared) * torch.ones(x.shape[1], device=x.device)
 
-    def _init_from_data(self, x):
+    def _init_from_data(self, x, samples_per_component):
         assert self.init_method == 'rnd_samples'
 
         K = self.n_components
         n = x.shape[0]
         l = self.n_factors
-        m = (l+1)*2     # number of samples per component
+        m = samples_per_component
+        o = np.random.choice(n, m*K, replace=False)
+        assert n >= m*K
         params = [torch.stack(t) for t in zip(
-            *[MFA._small_sample_ppca(x[np.random.choice(n, size=m, replace=False)], n_factors=l) for i in range(K)])]
+            *[MFA._small_sample_ppca(x[o[i*m:(i+1)*m]], n_factors=l) for i in range(K)])]
 
         self.MU.data = params[0]
         self.A.data = params[1]
         self.D.data = params[2]
-
 
 # Some unit testing...
 if __name__ == '__main__':
