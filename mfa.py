@@ -4,7 +4,6 @@ from torch.distributions import multinomial
 import math
 from matplotlib import pyplot as plt
 
-
 class MFA(torch.nn.Module):
     def __init__(self, n_components, n_features, n_factors, isotropic=True, init_method='rnd_samples'):
         super(MFA, self).__init__()
@@ -78,28 +77,30 @@ class MFA(torch.nn.Module):
         K, d, l = self.A.shape
         N = x.shape[0]
 
+        print('Random init...')
         self._init_from_data(x)
 
         def per_component_m_step(i):
             mu_i = torch.sum(r[:, [i]] * x, dim=0) / sum_r[i]
             s2_I = torch.pow(self.D[i, 0], 2.0) * torch.eye(l, device=x.device)
-            inv_M_i = torch.inverse(self.A[i].T @ self.A[i] + s2_I)
+            inv_M_i = torch.inverse((self.A[i].T @ self.A[i] + s2_I).double())
             x_c = x - mu_i.reshape(1, d)
-            SiAi = (1.0/sum_r[i]) * (r[:, [i]]*x_c).T @ (x_c @ self.A[i])
-            invM_AT_Si_Ai = inv_M_i @ self.A[i].T @ SiAi
-            A_i_new = SiAi @ torch.inverse(s2_I + invM_AT_Si_Ai)
+            SiAi = ((1.0/sum_r[i]) * (r[:, [i]]*x_c).T @ (x_c @ self.A[i])).double()
+            invM_AT_Si_Ai = inv_M_i @ self.A[i].T.double() @ SiAi
+            A_i_new = SiAi @ torch.inverse((s2_I.double() + invM_AT_Si_Ai))
             t1 = torch.trace(A_i_new.T @ (SiAi @ inv_M_i))
-            trace_S_i = torch.sum(N/sum_r[i] * torch.mean(r[:, [i]]*x_c*x_c, dim=0))
+            trace_S_i = (torch.sum(N/sum_r[i] * torch.mean(r[:, [i]]*x_c*x_c, dim=0))).double()
             sigma_2_new = (trace_S_i - t1)/d
-            return mu_i, A_i_new, torch.sqrt(sigma_2_new) * torch.ones_like(self.D[i])
+            return mu_i, A_i_new.float(), torch.sqrt(sigma_2_new).float() * torch.ones_like(self.D[i])
 
+        print('Starting EM iterations...')
         for it in range(max_iterations):
             r = self.responsibilities(x)
             sum_r = torch.sum(r, dim=0)
-            if it%5 == 0:
-                print('Iteration {}: log_likelihood = {}'.format(it, torch.mean(self.log_prob(x))))
-            else:
-                print('Iteration {}'.format(it))
+            # if it%5 == 0:
+            print('Iteration {}: log_likelihood = {}'.format(it, torch.mean(self.log_prob(x))))
+            # else:
+            #     print('Iteration {}'.format(it))
             new_params = [torch.stack(t) for t in zip(*[per_component_m_step(i) for i in range(K)])]
             self.MU.data = new_params[0]
             self.A.data = new_params[1]
