@@ -79,6 +79,7 @@ class MFA(torch.nn.Module):
         K, d, l = self.A.shape
         N = x.shape[0]
 
+        print('Random init...')
         self._init_from_data(x, samples_per_component=(l+1)*2)
 
         def per_component_m_step(i):
@@ -115,25 +116,25 @@ class MFA(torch.nn.Module):
         K, d, l = self.A.shape
 
         # Initial guess
+        print('Random init...')
         init_samples_per_component = (l+1)*2
         init_keys = [key for i, key in enumerate(RandomSampler(dataset)) if i < init_samples_per_component*K]
         init_samples, _ = zip(*[dataset[key] for key in init_keys])
-        self._init_from_data(torch.stack(init_samples), samples_per_component=init_samples_per_component)
+        self._init_from_data(torch.stack(init_samples).cuda(), samples_per_component=init_samples_per_component)
 
         loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
         for it in range(max_iterations):
 
             print('\nIteration {} / {}:'.format(it, max_iterations))
             # Step 1: Fetch all data and calculate and store all responsibilities, calculate mu
-            mu_weighted_sum = torch.zeros(size=[K, d], dtype=torch.float64)
+            mu_weighted_sum = torch.zeros(size=[K, d], dtype=torch.float64, device=self.MU.device)
             all_r = []
             for batch_x, _ in loader:
+                batch_x = batch_x.cuda()
                 print('E', end='', flush=True)
                 batch_r = self.responsibilities(batch_x)
                 mu_weighted_sum += torch.stack([torch.sum(batch_r[:, [i]] * batch_x, dim=0).double() for i in range(K)])
                 all_r.append(batch_r)
-                # if len(all_r)==4:
-                #     break
             all_r = torch.cat(all_r)
             print()
 
@@ -144,9 +145,10 @@ class MFA(torch.nn.Module):
             # Step 2 - Fetch all data again and Calculate all:
             # - SiAi - The empirical covariance matrices multiplied by the factors matrices
             # - Ri Xc^2 - The weighted empirical variance (for the noise variance calculation)
-            SA = torch.zeros([K, d, l], dtype=torch.float64)
-            RXc = torch.zeros(K, dtype=torch.float64)
+            SA = torch.zeros([K, d, l], dtype=torch.float64, device=self.MU.device)
+            RXc = torch.zeros(K, dtype=torch.float64, device=self.MU.device)
             for batch_num, (batch_x, _) in enumerate(loader):
+                batch_x = batch_x.cuda()
                 print('M', end='', flush=True)
                 batch_r = all_r[batch_num*batch_size: (batch_num+1)*batch_size]
                 for i in range(K):
@@ -157,8 +159,6 @@ class MFA(torch.nn.Module):
                 # SA += torch.stack([(batch_r[:, [i]]*(batch_x-self.MU[i])).T @
                 #                           ((batch_x-self.MU[i]) @ self.A[i]) for i in range(K)])
                 # RXc += torch.stack([batch_r[:, [i]]*torch.pow(batch_x-self.MU[i], 2.0)  for i in range(K)])
-                # if batch_num == 3:
-                #     break
             SA /= r_sum.reshape(-1, 1, 1)
             # Step 3 - Finalize the EM step
             s2_I = torch.pow(self.D[:, 0], 2.0).reshape(K, 1, 1) * torch.eye(l, device=self.MU.device).reshape(1, l, l)
