@@ -148,11 +148,16 @@ class MFA(torch.nn.Module):
         self._init_from_data(torch.stack(init_samples).cuda(), samples_per_component=init_samples_per_component)
         all_keys = [key for key in SequentialSampler(dataset)]
 
+        # Read some random samples for train-likelihood calculation
+        test_samples, _ = zip(*[dataset[key] for key in RandomSampler(dataset, num_samples=batch_size, replacement=True)])
+        test_samples = torch.stack(test_samples).cuda()
+
         loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
         for it in range(max_iterations):
 
             t = time.time()
-            print('Iteration {} / {}:'.format(it, max_iterations))
+            print('Iteration {}/{}, train log-likelihood={}:'.format(it, max_iterations,
+                                                                     torch.mean(self.log_prob(test_samples))))
             # Step 1: Fetch all data and calculate and store all responsibilities, calculate mu
             mu_weighted_sum = torch.zeros(size=[K, d], dtype=torch.float64, device=self.MU.device)
             all_r = []
@@ -182,6 +187,7 @@ class MFA(torch.nn.Module):
                 # For each component, process only samples with responsibility above threshold
                 for i in range(K):
                     print('M', end='', flush=True)
+                    # TODO: Maybe keep as tensor
                     sample_nums = np.nonzero(all_r[:, i].cpu().numpy() > responsibility_threshold)
                     batch_x, _ = zip(*[dataset[all_keys[j]] for j in sample_nums[0]])
                     batch_x = torch.stack(batch_x).cuda()
