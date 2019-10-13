@@ -4,7 +4,7 @@ from torch.distributions import multinomial
 import math
 from matplotlib import pyplot as plt
 from torch.utils.data import Dataset, DataLoader
-from torch.utils.data import RandomSampler, SequentialSampler
+from torch.utils.data import RandomSampler, SequentialSampler, BatchSampler
 import time
 
 #TODO: Rename to M PPCA and change D to be a scalar?
@@ -245,6 +245,141 @@ class MFA(torch.nn.Module):
             self.A.data = (SA @ torch.inverse(s2_I.double() + invM_AT_S_A)).float()      # (K, d, l)
             t1 = torch.stack([torch.trace(self.A[i].double().T @ (SA[i] @ inv_M[i])) for i in range(K)])
             self.D.data = torch.sqrt((RXc / r_sum - t1)/d).float().reshape(-1, 1) * torch.ones_like(self.D)
+        return ll_log
+
+    def batch_incremental_fit(self, dataset: Dataset, batch_size=1000, max_iterations=20,
+                              responsibility_sampling=False,  responsibility_threshold=False):
+        """
+        """
+        K, d, l = self.A.shape
+
+        """
+        Incremental implementation:
+        For all batches:
+            - Calculate and store responsibilities
+            - Compare to previous iteration responsibilities
+            - Update PI, MU incrementally
+            - Update SiAi incrementally... (MU change, some R changes)? 
+        
+       """
+        # Initial guess
+        print('Random init...')
+        init_samples_per_component = (l+1)*2
+        init_keys = [key for i, key in enumerate(RandomSampler(dataset)) if i < init_samples_per_component*K]
+        init_samples, _ = zip(*[dataset[key] for key in init_keys])
+        self._init_from_data(torch.stack(init_samples).cuda(), samples_per_component=init_samples_per_component)
+        all_keys = [key for key in SequentialSampler(dataset)]
+        N = len(all_keys)
+        # Read some random samples for train-likelihood calculation
+        # test_samples, _ = zip(*[dataset[key] for key in RandomSampler(dataset, num_samples=batch_size, replacement=True)])
+        test_samples, _ = zip(*[dataset[key] for key in all_keys[:batch_size*2]])
+        test_samples = torch.stack(test_samples).cuda()
+
+        ll_log = []
+        all_r = torch.zeros(size=[N, K], device=self.MU.device)
+        sum_r = torch.zeros(size=[K], dtype=torch.float64, device=self.MU.device)
+        sum_r_x = torch.zeros(size=[K, d], dtype=torch.float64, device=self.MU.device)
+        sum_r_x_x_A = torch.zeros(size=[K, d, l], dtype=torch.float64, device=self.MU.device)
+        RXc = torch.zeros(K, dtype=torch.float64, device=self.MU.device)
+
+        for it in range(max_iterations):
+
+            t = time.time()
+            ll_log.append(torch.mean(self.log_prob(test_samples)).item())
+            print('Iteration {}/{}, train log-likelihood={}:'.format(it, max_iterations, ll_log[-1]))
+
+            for batch_keys in BatchSampler(RandomSampler(dataset), batch_size=batch_size, drop_last=False):
+
+                batch_x, _ = zip(*[dataset[key] for key in batch_keys])
+                sampled_features = np.random.choice(d, int(d*responsibility_sampling)) if responsibility_sampling else None
+                batch_x = batch_x.cuda()
+                print('E', end='', flush=True)
+                batch_r = self.responsibilities(batch_x, sampled_features=sampled_features)
+                batch_prev_r = all_r[batch_keys]
+
+                # Update the sufficient statistics
+                all_r[batch_keys] = batch_r
+                sum_r += torch.sum(batch_r - batch_prev_r, dim=0).double()
+                for i in range(K):
+                    r_diff = batch_r[:, [i]] - batch_prev_r[:, [i]]
+                    sum_r_x[i] += torch.sum(r_diff * batch_x, dim=0).double()
+                    sum_r_x_x_A += torch.sum(r_diff * batch_x.T @ (batch_x @ self.A[i]), dim=0).double()
+                    # TODO: Check how the below update should be handled... it should be based on Var(X) sufficient statistics w/o using xc_i
+                    sum_sum_r_x_2[i] += torch.sum(r_diff * torch.pow(xc_i, 2.0)).double()
+
+                # Re-calculate the parameters
+                self.PI.data = (sum_r / torch.sum(sum_r)).float()
+                self.MU.data = (sum_r_x / sum_r.reshape(-1, 1)).float()
+                SA = (sum_r_x_x_A / sum_r.reshape(-1, 1, 1)).float() - \
+                               self.MU.reshape(K, d, 1) @ (self.MU.reshape(K, 1, d) @ self.A)
+
+                s2_I = torch.pow(self.D[:, 0], 2.0).reshape(K, 1, 1) * torch.eye(l, device=self.MU.device).reshape(1, l, l)
+                inv_M = torch.inverse((self.A.transpose(1, 2) @ self.A + s2_I).double())   # (K, l, l)
+                invM_AT_S_A = inv_M @ self.A.double().transpose(1, 2) @ SA   # (K, l, l)
+                self.A.data = (SA @ torch.inverse(s2_I.double() + invM_AT_S_A)).float()      # (K, d, l)
+                t1 = torch.stack([torch.trace(self.A[i].double().T @ (SA[i] @ inv_M[i])) for i in range(K)])
+                # TODO: Need to update the below
+                self.D.data = torch.sqrt((RXc / r_sum - t1)/d).float().reshape(-1, 1) * torch.ones_like(self.D)
+
+        return ll_log
+
+    def batch_online_fit(self, dataset: Dataset, batch_size=5000, max_iterations=20, responsibility_sampling=False,
+                  responsibility_threshold=False, learning_rate=0.1):
+        """
+        """
+        K, d, l = self.A.shape
+
+        # Initial guess
+        print('Random init...')
+        init_samples_per_component = (l+1)*2
+        init_keys = [key for i, key in enumerate(RandomSampler(dataset)) if i < init_samples_per_component*K]
+        init_samples, _ = zip(*[dataset[key] for key in init_keys])
+        self._init_from_data(torch.stack(init_samples).cuda(), samples_per_component=init_samples_per_component)
+
+        # Read some random samples for train-likelihood calculation
+        # test_samples, _ = zip(*[dataset[key] for key in RandomSampler(dataset, num_samples=batch_size, replacement=True)])
+        all_keys = [key for key in SequentialSampler(dataset)]
+        test_samples, _ = zip(*[dataset[key] for key in all_keys[:batch_size*2]])
+        test_samples = torch.stack(test_samples).cuda()
+
+        loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+        ll_log = []
+        for it in range(max_iterations):
+
+            ll_log.append(torch.mean(self.log_prob(test_samples)).item())
+            print('Iteration {}/{}, train log-likelihood={}:'.format(it, max_iterations, ll_log[-1]))
+            for batch_x, _ in loader:
+                sampled_features = np.random.choice(d, int(d*responsibility_sampling)) if responsibility_sampling else None
+                batch_x = batch_x.cuda()
+                print('E', end='', flush=True)
+                batch_r = self.responsibilities(batch_x, sampled_features=sampled_features)
+                mu_weighted_sum = torch.stack([torch.sum(batch_r[:, [i]] * batch_x, dim=0).double() for i in range(K)])
+                r_sum = torch.sum(batch_r, dim=0).double()
+
+                # Update PI and MU
+                new_PI = (r_sum / torch.sum(r_sum)).float()
+                new_MU = (mu_weighted_sum / r_sum.reshape(-1, 1)).float()
+
+                SA = torch.zeros([K, d, l], dtype=torch.float64, device=self.MU.device)
+                RXc = torch.zeros(K, dtype=torch.float64, device=self.MU.device)
+                for i in range(K):
+                    xc_i = batch_x-new_MU[i]
+                    SA[i] = ((batch_r[:, [i]] * xc_i).T @ (xc_i @ self.A[i])).double()
+                    RXc[i] = torch.sum(batch_r[:, [i]] * torch.pow(xc_i, 2.0)).double()
+                SA /= r_sum.reshape(-1, 1, 1)
+                s2_I = torch.pow(self.D[:, 0], 2.0).reshape(K, 1, 1) * torch.eye(l, device=self.MU.device).reshape(1, l, l)
+                inv_M = torch.inverse((self.A.transpose(1, 2) @ self.A + s2_I).double())   # (K, l, l)
+                invM_AT_S_A = inv_M @ self.A.double().transpose(1, 2) @ SA   # (K, l, l)
+
+                # Update A and D (sigma)
+                new_A = SA @ torch.inverse(s2_I.double() + invM_AT_S_A)
+                t1 = torch.stack([torch.trace(new_A[i].T @ (SA[i] @ inv_M[i])) for i in range(K)])
+                new_D = torch.sqrt((RXc / r_sum - t1)/d).float().reshape(-1, 1) * torch.ones_like(self.D)
+                self.PI.data = (1.0-learning_rate) * self.PI.data + learning_rate * new_PI
+                self.MU.data = (1.0-learning_rate) * self.MU.data + learning_rate * new_MU
+                self.A.data = (1.0-learning_rate) * self.A.data + learning_rate * new_A.float()
+                self.D.data = (1.0-learning_rate) * self.D.data + learning_rate * new_D
+            print()
         return ll_log
 
     @staticmethod
