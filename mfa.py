@@ -140,6 +140,27 @@ class MFA(torch.nn.Module):
         """
         K, d, l = self.A.shape
 
+        """
+        Current implementation:
+        Pass 1:
+            For all batches:
+            - Calculate and store responsibilities
+            - Accumulate weighted mean
+            Update PI, MU
+        Pass 2:
+            For all batches / for all components:
+            - Calculate and accumulate all SiAi
+            - Calculate and accumulate all R*Xc^2
+        Final calculations - update A, D
+        
+        Incremental implementation:
+        For all batches:
+            - Calculate and store responsibilities
+            - Compare to previous iteration responsibilities
+            - Update PI, MU incrementally
+            - Update SiAi incrementally... (MU change, some R changes)? 
+        
+       """
         # Initial guess
         print('Random init...')
         init_samples_per_component = (l+1)*2
@@ -149,21 +170,30 @@ class MFA(torch.nn.Module):
         all_keys = [key for key in SequentialSampler(dataset)]
 
         # Read some random samples for train-likelihood calculation
-        test_samples, _ = zip(*[dataset[key] for key in RandomSampler(dataset, num_samples=batch_size, replacement=True)])
+        # test_samples, _ = zip(*[dataset[key] for key in RandomSampler(dataset, num_samples=batch_size, replacement=True)])
+        test_samples, _ = zip(*[dataset[key] for key in all_keys[:batch_size*2]])
         test_samples = torch.stack(test_samples).cuda()
 
         loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+        sample_0_clone = None
+        ll_log = []
         for it in range(max_iterations):
 
             t = time.time()
-            print('Iteration {}/{}, train log-likelihood={}:'.format(it, max_iterations,
-                                                                     torch.mean(self.log_prob(test_samples))))
+            ll_log.append(torch.mean(self.log_prob(test_samples)).item())
+            print('Iteration {}/{}, train log-likelihood={}:'.format(it, max_iterations, ll_log[-1])
+                                                                     )
             # Step 1: Fetch all data and calculate and store all responsibilities, calculate mu
             mu_weighted_sum = torch.zeros(size=[K, d], dtype=torch.float64, device=self.MU.device)
             all_r = []
             for batch_x, _ in loader:
                 sampled_features = np.random.choice(d, int(d*responsibility_sampling)) if responsibility_sampling else None
                 batch_x = batch_x.cuda()
+                if not all_r:
+                    if it == 0:
+                        sample_0_clone = batch_x[0]
+                    else:
+                        assert torch.all(sample_0_clone == batch_x[0])
                 print('E', end='', flush=True)
                 batch_r = self.responsibilities(batch_x, sampled_features=sampled_features)
                 mu_weighted_sum += torch.stack([torch.sum(batch_r[:, [i]] * batch_x, dim=0).double() for i in range(K)])
@@ -215,6 +245,7 @@ class MFA(torch.nn.Module):
             self.A.data = (SA @ torch.inverse(s2_I.double() + invM_AT_S_A)).float()      # (K, d, l)
             t1 = torch.stack([torch.trace(self.A[i].double().T @ (SA[i] @ inv_M[i])) for i in range(K)])
             self.D.data = torch.sqrt((RXc / r_sum - t1)/d).float().reshape(-1, 1) * torch.ones_like(self.D)
+        return ll_log
 
     @staticmethod
     def _small_sample_ppca(x, n_factors):

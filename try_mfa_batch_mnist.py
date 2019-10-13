@@ -16,8 +16,14 @@ model = MFA(n_components=n_components, n_features=28*28, n_factors=6)
 model.cuda()
 
 print('Fitting using EM...')
-model.batch_fit(train_set, max_iterations=15, responsibility_threshold=1e-3)
+for tries in range(10):
+    ll_log = model.batch_fit(train_set, max_iterations=50, responsibility_threshold=1e-3)
+    plt.plot(ll_log)
+    plt.grid(True)
+    plt.pause(0.1)
 
+plt.savefig('mnist_mppca_em_init_with_lx2.pdf')
+plt.show()
 print('Saving model...')
 model_dir = './models/mnist'
 os.makedirs(model_dir, exist_ok=True)
