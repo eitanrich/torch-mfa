@@ -17,12 +17,15 @@ model.cuda()
 
 print('Fitting using EM...')
 for tries in range(10):
-    ll_log = model.batch_fit(train_set, max_iterations=50, responsibility_threshold=1e-3)
+    # ll_log = model.batch_fit(train_set, max_iterations=50, responsibility_threshold=1e-3)
+    # ll_log = model.batch_online_fit(train_set, max_iterations=20, responsibility_threshold=1e-3)
+    ll_log = model.batch_incremental_fit(train_set, max_iterations=20)
+
     plt.plot(ll_log)
     plt.grid(True)
     plt.pause(0.1)
 
-plt.savefig('mnist_mppca_em_init_with_lx2.pdf')
+plt.savefig('mnist_mppca_online_em_init_with_lx2.pdf')
 plt.show()
 print('Saving model...')
 model_dir = './models/mnist'

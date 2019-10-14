@@ -248,7 +248,7 @@ class MFA(torch.nn.Module):
         return ll_log
 
     def batch_incremental_fit(self, dataset: Dataset, batch_size=1000, max_iterations=20,
-                              responsibility_sampling=False,  responsibility_threshold=False):
+                              responsibility_sampling=False):
         """
         """
         K, d, l = self.A.shape
@@ -280,7 +280,21 @@ class MFA(torch.nn.Module):
         sum_r = torch.zeros(size=[K], dtype=torch.float64, device=self.MU.device)
         sum_r_x = torch.zeros(size=[K, d], dtype=torch.float64, device=self.MU.device)
         sum_r_x_x_A = torch.zeros(size=[K, d, l], dtype=torch.float64, device=self.MU.device)
-        RXc = torch.zeros(K, dtype=torch.float64, device=self.MU.device)
+        sum_r_norm_x = torch.zeros(K, dtype=torch.float64, device=self.MU.device)
+
+        def update_parameters():
+            self.PI.data = (sum_r / torch.sum(sum_r)).float()
+            self.MU.data = (sum_r_x / sum_r.reshape(-1, 1)).float()
+            SA = sum_r_x_x_A / sum_r.reshape(-1, 1, 1) - \
+                 (self.MU.reshape(K, d, 1) @ (self.MU.reshape(K, 1, d) @ self.A)).double()
+
+            s2_I = torch.pow(self.D[:, 0], 2.0).reshape(K, 1, 1) * torch.eye(l, device=self.MU.device).reshape(1, l, l)
+            inv_M = torch.inverse((self.A.transpose(1, 2) @ self.A + s2_I).double())   # (K, l, l)
+            invM_AT_S_A = inv_M @ self.A.double().transpose(1, 2) @ SA   # (K, l, l)
+            self.A.data = (SA @ torch.inverse(s2_I.double() + invM_AT_S_A)).float()      # (K, d, l)
+            t1 = torch.stack([torch.trace(self.A[i].double().T @ (SA[i] @ inv_M[i])) for i in range(K)])
+            t_s = sum_r_norm_x / sum_r - torch.sum(torch.pow(self.MU, 2.0), dim=1).double()
+            self.D.data = torch.sqrt((t_s - t1)/d).float().reshape(-1, 1) * torch.ones_like(self.D)
 
         for it in range(max_iterations):
 
@@ -291,8 +305,8 @@ class MFA(torch.nn.Module):
             for batch_keys in BatchSampler(RandomSampler(dataset), batch_size=batch_size, drop_last=False):
 
                 batch_x, _ = zip(*[dataset[key] for key in batch_keys])
+                batch_x = torch.stack(batch_x).cuda()
                 sampled_features = np.random.choice(d, int(d*responsibility_sampling)) if responsibility_sampling else None
-                batch_x = batch_x.cuda()
                 print('E', end='', flush=True)
                 batch_r = self.responsibilities(batch_x, sampled_features=sampled_features)
                 batch_prev_r = all_r[batch_keys]
@@ -303,24 +317,27 @@ class MFA(torch.nn.Module):
                 for i in range(K):
                     r_diff = batch_r[:, [i]] - batch_prev_r[:, [i]]
                     sum_r_x[i] += torch.sum(r_diff * batch_x, dim=0).double()
-                    sum_r_x_x_A += torch.sum(r_diff * batch_x.T @ (batch_x @ self.A[i]), dim=0).double()
-                    # TODO: Check how the below update should be handled... it should be based on Var(X) sufficient statistics w/o using xc_i
-                    sum_sum_r_x_2[i] += torch.sum(r_diff * torch.pow(xc_i, 2.0)).double()
+                    sum_r_x_x_A += torch.sum((r_diff * batch_x).T @ (batch_x @ self.A[i]), dim=0).double()
+                    sum_r_norm_x[i] += torch.sum(r_diff * torch.sum(torch.pow(batch_x, 2.0), dim=1)).double()
 
-                # Re-calculate the parameters
-                self.PI.data = (sum_r / torch.sum(sum_r)).float()
-                self.MU.data = (sum_r_x / sum_r.reshape(-1, 1)).float()
-                SA = (sum_r_x_x_A / sum_r.reshape(-1, 1, 1)).float() - \
-                               self.MU.reshape(K, d, 1) @ (self.MU.reshape(K, 1, d) @ self.A)
+                if it > 0:
+                    update_parameters()
+                    # # Re-calculate the parameters
+                    # self.PI.data = (sum_r / torch.sum(sum_r)).float()
+                    # self.MU.data = (sum_r_x / sum_r.reshape(-1, 1)).float()
+                    # SA = sum_r_x_x_A / sum_r.reshape(-1, 1, 1) - \
+                    #      (self.MU.reshape(K, d, 1) @ (self.MU.reshape(K, 1, d) @ self.A)).double()
+                    #
+                    # s2_I = torch.pow(self.D[:, 0], 2.0).reshape(K, 1, 1) * torch.eye(l, device=self.MU.device).reshape(1, l, l)
+                    # inv_M = torch.inverse((self.A.transpose(1, 2) @ self.A + s2_I).double())   # (K, l, l)
+                    # invM_AT_S_A = inv_M @ self.A.double().transpose(1, 2) @ SA   # (K, l, l)
+                    # self.A.data = (SA @ torch.inverse(s2_I.double() + invM_AT_S_A)).float()      # (K, d, l)
+                    # t1 = torch.stack([torch.trace(self.A[i].double().T @ (SA[i] @ inv_M[i])) for i in range(K)])
+                    # t_s = sum_r_norm_x / sum_r - torch.sum(torch.pow(self.MU, 2.0), dim=1).double()
+                    # self.D.data = torch.sqrt((t_s - t1)/d).float().reshape(-1, 1) * torch.ones_like(self.D)
 
-                s2_I = torch.pow(self.D[:, 0], 2.0).reshape(K, 1, 1) * torch.eye(l, device=self.MU.device).reshape(1, l, l)
-                inv_M = torch.inverse((self.A.transpose(1, 2) @ self.A + s2_I).double())   # (K, l, l)
-                invM_AT_S_A = inv_M @ self.A.double().transpose(1, 2) @ SA   # (K, l, l)
-                self.A.data = (SA @ torch.inverse(s2_I.double() + invM_AT_S_A)).float()      # (K, d, l)
-                t1 = torch.stack([torch.trace(self.A[i].double().T @ (SA[i] @ inv_M[i])) for i in range(K)])
-                # TODO: Need to update the below
-                self.D.data = torch.sqrt((RXc / r_sum - t1)/d).float().reshape(-1, 1) * torch.ones_like(self.D)
-
+            if it == 0:
+                update_parameters()
         return ll_log
 
     def batch_online_fit(self, dataset: Dataset, batch_size=5000, max_iterations=20, responsibility_sampling=False,
