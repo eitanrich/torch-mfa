@@ -254,12 +254,13 @@ class MFA(torch.nn.Module):
         K, d, l = self.A.shape
 
         """
-        Incremental implementation:
+        Incremental implementation per "A view of the EM algorithm that justifies incremental, 
+        sparse, and other variants", Neal & Hinton, 1998.
+        Adapted by Eitan for Mixture of Probabilistic PCA
         For all batches:
             - Calculate and store responsibilities
-            - Compare to previous iteration responsibilities
-            - Update PI, MU incrementally
-            - Update SiAi incrementally... (MU change, some R changes)? 
+            - Update the sufficient statistics incrementally
+            - Recalculate the parameters
         
        """
         # Initial guess
@@ -298,26 +299,24 @@ class MFA(torch.nn.Module):
 
         for it in range(max_iterations):
 
-            t = time.time()
             ll_log.append(torch.mean(self.log_prob(test_samples)).item())
             print('Iteration {}/{}, train log-likelihood={}:'.format(it, max_iterations, ll_log[-1]))
 
             for batch_keys in BatchSampler(RandomSampler(dataset), batch_size=batch_size, drop_last=False):
-
                 batch_x, _ = zip(*[dataset[key] for key in batch_keys])
                 batch_x = torch.stack(batch_x).cuda()
                 sampled_features = np.random.choice(d, int(d*responsibility_sampling)) if responsibility_sampling else None
                 print('E', end='', flush=True)
                 batch_r = self.responsibilities(batch_x, sampled_features=sampled_features)
-                batch_prev_r = all_r[batch_keys]
+                batch_prev_r = all_r[batch_keys].clone()
 
                 # Update the sufficient statistics
                 all_r[batch_keys] = batch_r
-                sum_r += torch.sum(batch_r - batch_prev_r, dim=0).double()
                 for i in range(K):
                     r_diff = batch_r[:, [i]] - batch_prev_r[:, [i]]
+                    sum_r[i] += torch.sum(r_diff).double()
                     sum_r_x[i] += torch.sum(r_diff * batch_x, dim=0).double()
-                    sum_r_x_x_A += torch.sum((r_diff * batch_x).T @ (batch_x @ self.A[i]), dim=0).double()
+                    sum_r_x_x_A += ((r_diff * batch_x).T @ (batch_x @ self.A[i])).double()
                     sum_r_norm_x[i] += torch.sum(r_diff * torch.sum(torch.pow(batch_x, 2.0), dim=1)).double()
 
                 if it > 0:
