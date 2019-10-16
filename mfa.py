@@ -278,15 +278,13 @@ class MFA(torch.nn.Module):
         all_r = torch.zeros(size=[N, K], device=self.MU.device)
         sum_r = torch.zeros(size=[K], dtype=torch.float64, device=self.MU.device)
         sum_r_x = torch.zeros(size=[K, d], dtype=torch.float64, device=self.MU.device)
-        sum_r_x_x_A = torch.zeros(size=[K, d, l], dtype=torch.float64, device=self.MU.device)
+        sum_r_x_x = torch.zeros(size=[K, d, d], dtype=torch.float64, device=self.MU.device)
         sum_r_norm_x = torch.zeros(K, dtype=torch.float64, device=self.MU.device)
 
         def update_parameters():
             self.PI.data = (sum_r / torch.sum(sum_r)).float()
             self.MU.data = (sum_r_x / sum_r.reshape(-1, 1)).float()
-            SA = sum_r_x_x_A / sum_r.reshape(-1, 1, 1) - \
-                 (self.MU.reshape(K, d, 1) @ (self.MU.reshape(K, 1, d) @ self.A)).double()
-
+            SA = (sum_r_x_x / sum_r.reshape(-1, 1, 1) - (self.MU.reshape(K, d, 1) @ self.MU.reshape(K, 1, d)).double()) @ self.A.double()
             s2_I = torch.pow(self.D[:, 0], 2.0).reshape(K, 1, 1) * torch.eye(l, device=self.MU.device).reshape(1, l, l)
             inv_M = torch.inverse((self.A.transpose(1, 2) @ self.A + s2_I).double())   # (K, l, l)
             invM_AT_S_A = inv_M @ self.A.double().transpose(1, 2) @ SA   # (K, l, l)
@@ -314,14 +312,17 @@ class MFA(torch.nn.Module):
                     r_diff = batch_r[:, [i]] - batch_prev_r[:, [i]]
                     sum_r[i] += torch.sum(r_diff).double()
                     sum_r_x[i] += torch.sum(r_diff * batch_x, dim=0).double()
-                    sum_r_x_x_A[i] += ((r_diff * batch_x).T @ (batch_x @ self.A[i])).double()
+                    sum_r_x_x[i] += ((r_diff * batch_x).T @ batch_x).double()
                     sum_r_norm_x[i] += torch.sum(r_diff * torch.pow(batch_x, 2.0)).double()
 
                 if it > 0:
                     update_parameters()
-
+                    print(torch.mean(self.log_prob(test_samples)).item())
+            print()
             if it == 0:
                 update_parameters()
+                print(torch.mean(self.log_prob(test_samples)).item())
+
         ll_log.append(torch.mean(self.log_prob(test_samples)).item())
         print('\nFinal train log-likelihood={}:'.format(ll_log[-1]))
         return ll_log
