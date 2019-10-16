@@ -276,7 +276,7 @@ class MFA(torch.nn.Module):
         test_samples = torch.stack(test_samples).cuda()
 
         ll_log = []
-        loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+        loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
         for it in range(max_iterations):
             t = time.time()
 
@@ -296,8 +296,12 @@ class MFA(torch.nn.Module):
                 sum_r += torch.sum(batch_r, dim=0).double()
                 sum_r_norm_x += torch.sum(batch_r * torch.sum(torch.pow(batch_x, 2.0), dim=1, keepdim=True), dim=0).double()
                 for i in range(K):
-                    sum_r_x[i] += torch.sum(batch_r[:, [i]] * batch_x, dim=0).double()
-                    sum_r_x_x_A[i] += ((batch_r[:, [i]] * batch_x).T @ (batch_x @ self.A[i])).double()
+                    batch_r_x = batch_r[:, [i]] * batch_x
+                    sum_r_x[i] += torch.sum(batch_r_x, dim=0).double()
+                    sum_r_x_x_A[i] += (batch_r_x.T @ (batch_x @ self.A[i])).double()
+                # TODO: Check option to abort E step early, creating a faster, stochastic EM
+                # if torch.sum(sum_r) > N/2:
+                #     break
             print('/M...', end='', flush=True)
             self.PI.data = (sum_r / torch.sum(sum_r)).float()
             self.MU.data = (sum_r_x / sum_r.reshape(-1, 1)).float()
