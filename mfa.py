@@ -141,7 +141,6 @@ class MFA(torch.nn.Module):
         K, d, l = self.A.shape
 
         """
-        Current implementation:
         Pass 1:
             For all batches:
             - Calculate and store responsibilities
@@ -152,21 +151,15 @@ class MFA(torch.nn.Module):
             - Calculate and accumulate all SiAi
             - Calculate and accumulate all R*Xc^2
         Final calculations - update A, D
-        
-        Incremental implementation:
-        For all batches:
-            - Calculate and store responsibilities
-            - Compare to previous iteration responsibilities
-            - Update PI, MU incrementally
-            - Update SiAi incrementally... (MU change, some R changes)? 
-        
        """
         # Initial guess
         print('Random init...')
         init_samples_per_component = (l+1)*2
-        init_keys = [key for i, key in enumerate(RandomSampler(dataset)) if i < init_samples_per_component*K]
+        # init_keys = [key for i, key in enumerate(RandomSampler(dataset)) if i < init_samples_per_component*K]
+        init_keys = list(np.load('init_keys.npy'))
         init_samples, _ = zip(*[dataset[key] for key in init_keys])
         self._init_from_data(torch.stack(init_samples).cuda(), samples_per_component=init_samples_per_component)
+
         all_keys = [key for key in SequentialSampler(dataset)]
 
         # Read some random samples for train-likelihood calculation
@@ -245,6 +238,9 @@ class MFA(torch.nn.Module):
             self.A.data = (SA @ torch.inverse(s2_I.double() + invM_AT_S_A)).float()      # (K, d, l)
             t1 = torch.stack([torch.trace(self.A[i].double().T @ (SA[i] @ inv_M[i])) for i in range(K)])
             self.D.data = torch.sqrt((RXc / r_sum - t1)/d).float().reshape(-1, 1) * torch.ones_like(self.D)
+
+        ll_log.append(torch.mean(self.log_prob(test_samples)).item())
+        print('Final train log-likelihood={}:'.format(ll_log[-1]))
         return ll_log
 
     def batch_incremental_fit(self, dataset: Dataset, batch_size=1000, max_iterations=20,
@@ -266,9 +262,11 @@ class MFA(torch.nn.Module):
         # Initial guess
         print('Random init...')
         init_samples_per_component = (l+1)*2
-        init_keys = [key for i, key in enumerate(RandomSampler(dataset)) if i < init_samples_per_component*K]
+        # init_keys = [key for i, key in enumerate(RandomSampler(dataset)) if i < init_samples_per_component*K]
+        init_keys = list(np.load('init_keys.npy'))
         init_samples, _ = zip(*[dataset[key] for key in init_keys])
         self._init_from_data(torch.stack(init_samples).cuda(), samples_per_component=init_samples_per_component)
+
         all_keys = [key for key in SequentialSampler(dataset)]
         N = len(all_keys)
         # Read some random samples for train-likelihood calculation
@@ -316,27 +314,16 @@ class MFA(torch.nn.Module):
                     r_diff = batch_r[:, [i]] - batch_prev_r[:, [i]]
                     sum_r[i] += torch.sum(r_diff).double()
                     sum_r_x[i] += torch.sum(r_diff * batch_x, dim=0).double()
-                    sum_r_x_x_A += ((r_diff * batch_x).T @ (batch_x @ self.A[i])).double()
-                    sum_r_norm_x[i] += torch.sum(r_diff * torch.sum(torch.pow(batch_x, 2.0), dim=1)).double()
+                    sum_r_x_x_A[i] += ((r_diff * batch_x).T @ (batch_x @ self.A[i])).double()
+                    sum_r_norm_x[i] += torch.sum(r_diff * torch.pow(batch_x, 2.0)).double()
 
                 if it > 0:
                     update_parameters()
-                    # # Re-calculate the parameters
-                    # self.PI.data = (sum_r / torch.sum(sum_r)).float()
-                    # self.MU.data = (sum_r_x / sum_r.reshape(-1, 1)).float()
-                    # SA = sum_r_x_x_A / sum_r.reshape(-1, 1, 1) - \
-                    #      (self.MU.reshape(K, d, 1) @ (self.MU.reshape(K, 1, d) @ self.A)).double()
-                    #
-                    # s2_I = torch.pow(self.D[:, 0], 2.0).reshape(K, 1, 1) * torch.eye(l, device=self.MU.device).reshape(1, l, l)
-                    # inv_M = torch.inverse((self.A.transpose(1, 2) @ self.A + s2_I).double())   # (K, l, l)
-                    # invM_AT_S_A = inv_M @ self.A.double().transpose(1, 2) @ SA   # (K, l, l)
-                    # self.A.data = (SA @ torch.inverse(s2_I.double() + invM_AT_S_A)).float()      # (K, d, l)
-                    # t1 = torch.stack([torch.trace(self.A[i].double().T @ (SA[i] @ inv_M[i])) for i in range(K)])
-                    # t_s = sum_r_norm_x / sum_r - torch.sum(torch.pow(self.MU, 2.0), dim=1).double()
-                    # self.D.data = torch.sqrt((t_s - t1)/d).float().reshape(-1, 1) * torch.ones_like(self.D)
 
             if it == 0:
                 update_parameters()
+        ll_log.append(torch.mean(self.log_prob(test_samples)).item())
+        print('\nFinal train log-likelihood={}:'.format(ll_log[-1]))
         return ll_log
 
     def batch_online_fit(self, dataset: Dataset, batch_size=5000, max_iterations=20, responsibility_sampling=False,
@@ -414,7 +401,7 @@ class MFA(torch.nn.Module):
         n = x.shape[0]
         l = self.n_factors
         m = samples_per_component
-        o = np.random.choice(n, m*K, replace=False)
+        o = np.random.choice(n, m*K, replace=False) if m*K < n else np.arange(n)
         assert n >= m*K
         params = [torch.stack(t) for t in zip(
             *[MFA._small_sample_ppca(x[o[i*m:(i+1)*m]], n_factors=l) for i in range(K)])]
