@@ -155,8 +155,8 @@ class MFA(torch.nn.Module):
         # Initial guess
         print('Random init...')
         init_samples_per_component = (l+1)*2
-        # init_keys = [key for i, key in enumerate(RandomSampler(dataset)) if i < init_samples_per_component*K]
-        init_keys = list(np.load('init_keys.npy'))
+        init_keys = [key for i, key in enumerate(RandomSampler(dataset)) if i < init_samples_per_component*K]
+        # init_keys = list(np.load('init_keys.npy'))
         init_samples, _ = zip(*[dataset[key] for key in init_keys])
         self._init_from_data(torch.stack(init_samples).cuda(), samples_per_component=init_samples_per_component)
 
@@ -243,6 +243,79 @@ class MFA(torch.nn.Module):
         print('Final train log-likelihood={}:'.format(ll_log[-1]))
         return ll_log
 
+    def batch_fit_2(self, dataset: Dataset, batch_size=1000, max_iterations=20, responsibility_sampling=False):
+        """
+        """
+        K, d, l = self.A.shape
+
+        """
+        Efficient mini-batch EM:
+        E step:
+            For all batches:
+            - Calculate and store responsibilities
+            - Accumulate sufficient statistics: responsibility-weighted means of x and x (x^T A)
+        M step: 
+            Re-calculate all parameters
+        Note that incremental EM per Neal & Hinton, 1998 is not supported, since we can't maintain
+            the full x x^T as sufficient statistic - we need to multiply by A to get a more compact
+            representation.
+       """
+        # Initial guess
+        print('Random init...')
+        init_samples_per_component = (l+1)*2
+        init_keys = [key for i, key in enumerate(RandomSampler(dataset)) if i < init_samples_per_component*K]
+        # init_keys = list(np.load('init_keys.npy'))
+        init_samples, _ = zip(*[dataset[key] for key in init_keys])
+        self._init_from_data(torch.stack(init_samples).cuda(), samples_per_component=init_samples_per_component)
+
+        all_keys = [key for key in SequentialSampler(dataset)]
+        N = len(all_keys)
+        # Read some random samples for train-likelihood calculation
+        # test_samples, _ = zip(*[dataset[key] for key in RandomSampler(dataset, num_samples=batch_size, replacement=True)])
+        test_samples, _ = zip(*[dataset[key] for key in all_keys[:batch_size*2]])
+        test_samples = torch.stack(test_samples).cuda()
+
+        ll_log = []
+        loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+        for it in range(max_iterations):
+            t = time.time()
+
+            sum_r = torch.zeros(size=[K], dtype=torch.float64, device=self.MU.device)
+            sum_r_x = torch.zeros(size=[K, d], dtype=torch.float64, device=self.MU.device)
+            sum_r_x_x_A = torch.zeros(size=[K, d, l], dtype=torch.float64, device=self.MU.device)
+            sum_r_norm_x = torch.zeros(K, dtype=torch.float64, device=self.MU.device)
+
+            ll_log.append(torch.mean(self.log_prob(test_samples)).item())
+            print('Iteration {}/{}, train log-likelihood={}:'.format(it, max_iterations, ll_log[-1]))
+
+            for batch_x, _ in loader:
+                batch_x = batch_x.cuda()
+                sampled_features = np.random.choice(d, int(d*responsibility_sampling)) if responsibility_sampling else None
+                print('E', end='', flush=True)
+                batch_r = self.responsibilities(batch_x, sampled_features=sampled_features)
+                sum_r += torch.sum(batch_r, dim=0).double()
+                sum_r_norm_x += torch.sum(batch_r * torch.sum(torch.pow(batch_x, 2.0), dim=1, keepdim=True), dim=0).double()
+                for i in range(K):
+                    sum_r_x[i] += torch.sum(batch_r[:, [i]] * batch_x, dim=0).double()
+                    sum_r_x_x_A[i] += ((batch_r[:, [i]] * batch_x).T @ (batch_x @ self.A[i])).double()
+            print('/M...', end='', flush=True)
+            self.PI.data = (sum_r / torch.sum(sum_r)).float()
+            self.MU.data = (sum_r_x / sum_r.reshape(-1, 1)).float()
+            SA = sum_r_x_x_A / sum_r.reshape(-1, 1, 1) - \
+                 (self.MU.reshape(K, d, 1) @ (self.MU.reshape(K, 1, d) @ self.A)).double()
+            s2_I = torch.pow(self.D[:, 0], 2.0).reshape(K, 1, 1) * torch.eye(l, device=self.MU.device).reshape(1, l, l)
+            inv_M = torch.inverse((self.A.transpose(1, 2) @ self.A + s2_I).double())   # (K, l, l)
+            invM_AT_S_A = inv_M @ self.A.double().transpose(1, 2) @ SA   # (K, l, l)
+            self.A.data = (SA @ torch.inverse(s2_I.double() + invM_AT_S_A)).float()      # (K, d, l)
+            t1 = torch.stack([torch.trace(self.A[i].double().T @ (SA[i] @ inv_M[i])) for i in range(K)])
+            t_s = sum_r_norm_x / sum_r - torch.sum(torch.pow(self.MU, 2.0), dim=1).double()
+            self.D.data = torch.sqrt((t_s - t1)/d).float().reshape(-1, 1) * torch.ones_like(self.D)
+            print(' ({} sec)'.format(time.time()-t))
+
+        ll_log.append(torch.mean(self.log_prob(test_samples)).item())
+        print('\nFinal train log-likelihood={}:'.format(ll_log[-1]))
+        return ll_log
+
     def batch_incremental_fit(self, dataset: Dataset, batch_size=1000, max_iterations=20,
                               responsibility_sampling=False):
         """
@@ -262,8 +335,8 @@ class MFA(torch.nn.Module):
         # Initial guess
         print('Random init...')
         init_samples_per_component = (l+1)*2
-        # init_keys = [key for i, key in enumerate(RandomSampler(dataset)) if i < init_samples_per_component*K]
-        init_keys = list(np.load('init_keys.npy'))
+        init_keys = [key for i, key in enumerate(RandomSampler(dataset)) if i < init_samples_per_component*K]
+        # init_keys = list(np.load('init_keys.npy'))
         init_samples, _ = zip(*[dataset[key] for key in init_keys])
         self._init_from_data(torch.stack(init_samples).cuda(), samples_per_component=init_samples_per_component)
 
@@ -315,13 +388,13 @@ class MFA(torch.nn.Module):
                     sum_r_x_x[i] += ((r_diff * batch_x).T @ batch_x).double()
                     sum_r_norm_x[i] += torch.sum(r_diff * torch.pow(batch_x, 2.0)).double()
 
-                if it > 0:
-                    update_parameters()
-                    print(torch.mean(self.log_prob(test_samples)).item())
-            print()
-            if it == 0:
+                # if it > 0:
                 update_parameters()
                 print(torch.mean(self.log_prob(test_samples)).item())
+            print()
+            # if it == 0:
+            #     update_parameters()
+            #     print(torch.mean(self.log_prob(test_samples)).item())
 
         ll_log.append(torch.mean(self.log_prob(test_samples)).item())
         print('\nFinal train log-likelihood={}:'.format(ll_log[-1]))
