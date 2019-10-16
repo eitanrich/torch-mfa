@@ -276,7 +276,7 @@ class MFA(torch.nn.Module):
         test_samples = torch.stack(test_samples).cuda()
 
         ll_log = []
-        loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+        loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=8)
         for it in range(max_iterations):
             t = time.time()
 
