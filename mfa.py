@@ -52,7 +52,7 @@ class MFA(torch.nn.Module):
 
         m_d = torch.stack([per_component_md(i) for i in range(K)])
 
-        det_L = torch.log(torch.det(L))
+        det_L = torch.logdet(L)
         log_det_Sigma = det_L - torch.sum(torch.log(iD.reshape(K, d)), axis=1)
         log_prob_data_given_components = -0.5 * ((d*np.log(2.0*math.pi) + log_det_Sigma).reshape(K, 1) + m_d)
         return self.PI.reshape(1, K) + log_prob_data_given_components.T
@@ -73,7 +73,7 @@ class MFA(torch.nn.Module):
 
         m_d = torch.stack([per_component_md(i) for i in range(K)])
 
-        det_L = torch.log(torch.det(L))
+        det_L = torch.logdet(L)
         log_det_Sigma = det_L - torch.sum(torch.log(iD.reshape(K, d)), axis=1)
         log_prob_data_given_components = -0.5 * ((d*np.log(2.0*math.pi) + log_det_Sigma).reshape(K, 1) + m_d)
         # component_log_probs = (torch.log(torch.softmax(self.PI_logits)), [K, 1])
@@ -122,8 +122,8 @@ class MFA(torch.nn.Module):
 
     def _parameters_sanity_check(self):
         K, d, l = self.A.shape
-        assert torch.all(self.PI > 0.01/K)
-        assert torch.all(self.D > 1e-6) and torch.all(self.D < 1.0)
+        assert torch.all(self.PI > 0.01/K), self.PI
+        assert torch.all(self.D > 1e-3) and torch.all(self.D < 1.0)
         assert torch.all(torch.abs(self.A) < 10.0), torch.max(torch.abs(self.A))
         assert torch.all(torch.abs(self.MU) < 1.0), torch.max(torch.abs(self.MU))
 
