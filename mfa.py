@@ -20,11 +20,9 @@ class MFA(torch.nn.Module):
         self.A = torch.nn.Parameter(torch.zeros(n_components, n_features, n_factors), requires_grad=False)
         self.D = torch.nn.Parameter(torch.zeros(n_components, n_features), requires_grad=False)
         self.PI = torch.nn.Parameter(torch.ones(n_components)/float(n_components), requires_grad=False)
-        # self.PI_logits = torch.nn.Parameter(torch.zeros(n_components))
 
     def sample(self, n, with_noise=True):
         K, d, l = self.A.shape
-        # c_nums = multinomial.Multinomial(total_count=n, probs=self.PI).sample().long()
         c_nums = np.random.choice(K, n, p=self.PI.detach().cpu().numpy())
         z_l = torch.randn(n, l, device=self.A.device)
         z_d = torch.randn(n, d, device=self.A.device) if with_noise else torch.zeros(n, d, device=self.A.device)
@@ -32,16 +30,21 @@ class MFA(torch.nn.Module):
                                for i in range(n)])
         return samples, c_nums
 
-    def _per_component_log_likelihood_sampled_features(self, full_x, sampled_features):
-        # Create some temporary matrices to simplify calculations...
-        A = self.A[:, sampled_features]
-        AT = A.transpose(1, 2)
-        MU = self.MU[:, sampled_features]
+    def per_component_log_likelihood(self, x, sampled_features=None):
+        if sampled_features is not None:
+            return MFA._per_component_log_likelihood(x[:, sampled_features], self.PI,
+                                                     self.MU[:, sampled_features],
+                                                     self.A[:, sampled_features],
+                                                     self.D[:, sampled_features])
+        return MFA._per_component_log_likelihood(x, self.PI, self.MU, self.A, self.D)
+
+    @staticmethod
+    def _per_component_log_likelihood(x, PI, MU, A, D):
         K, d, l = A.shape
-        iD = torch.pow(self.D[:, sampled_features], -2.0).view(K, d, 1)
-        L = torch.eye(l, device=self.A.device).reshape(1, l, l) + AT @ (iD*A)
+        AT = A.transpose(1, 2)
+        iD = torch.pow(D, -2.0).view(K, d, 1)
+        L = torch.eye(l, device=A.device).reshape(1, l, l) + AT @ (iD*A)
         iL = torch.inverse(L)
-        x = full_x[:, sampled_features]
 
         def per_component_md(i):
             x_c = (x - MU[i].reshape(1, d)).T  # shape = (d, n)
@@ -49,42 +52,19 @@ class MFA(torch.nn.Module):
             return torch.sum(x_c * m_d_1, dim=0)
 
         m_d = torch.stack([per_component_md(i) for i in range(K)])
-
         det_L = torch.logdet(L)
         log_det_Sigma = det_L - torch.sum(torch.log(iD.reshape(K, d)), axis=1)
         log_prob_data_given_components = -0.5 * ((d*np.log(2.0*math.pi) + log_det_Sigma).reshape(K, 1) + m_d)
-        return self.PI.reshape(1, K) + log_prob_data_given_components.T
-
-    def per_component_log_likelihood(self, x):
-        K, d, l = self.A.shape
-        # Create some temporary matrices to simplify calculations...
-        A = self.A
-        AT = A.transpose(1, 2)
-        iD = torch.pow(self.D, -2.0).view(K, d, 1)
-        L = torch.eye(l, device=self.A.device).reshape(1, l, l) + AT @ (iD*A)
-        iL = torch.inverse(L)
-
-        def per_component_md(i):
-            x_c = (x - self.MU[i].reshape(1, d)).T  # shape = (d, n)
-            m_d_1 = (iD[i] * x_c) - ((iD[i] * A[i]) @ iL[i]) @ (AT[i] @ (iD[i] * x_c))
-            return torch.sum(x_c * m_d_1, dim=0)
-
-        m_d = torch.stack([per_component_md(i) for i in range(K)])
-
-        det_L = torch.logdet(L)
-        log_det_Sigma = det_L - torch.sum(torch.log(iD.reshape(K, d)), axis=1)
-        log_prob_data_given_components = -0.5 * ((d*np.log(2.0*math.pi) + log_det_Sigma).reshape(K, 1) + m_d)
-        # component_log_probs = (torch.log(torch.softmax(self.PI_logits)), [K, 1])
-        return self.PI.reshape(1, K) + log_prob_data_given_components.T
+        return PI.reshape(1, K) + log_prob_data_given_components.T
 
     def log_prob(self, x):
         return torch.logsumexp(self.per_component_log_likelihood(x), dim=1)
 
     def log_responsibilities(self, x, sampled_features=None):
-        if sampled_features is None:
-            comp_LLs = self.per_component_log_likelihood(x)
-        else:
-            comp_LLs = self._per_component_log_likelihood_sampled_features(x, sampled_features)
+        # if sampled_features is None:
+        comp_LLs = self.per_component_log_likelihood(x, sampled_features=sampled_features)
+        # else:
+        #     comp_LLs = self._per_component_log_likelihood_sampled_features(x, sampled_features)
         return comp_LLs - torch.logsumexp(comp_LLs, dim=1).reshape(-1, 1)
 
     def responsibilities(self, x, sampled_features=None):
