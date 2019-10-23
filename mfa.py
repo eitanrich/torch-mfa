@@ -1,10 +1,10 @@
 import numpy as np
 import torch
 from torch.distributions import multinomial
-import math
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.data import RandomSampler, SequentialSampler, BatchSampler
 import time
+import math
 
 
 class MFA(torch.nn.Module):
@@ -61,10 +61,7 @@ class MFA(torch.nn.Module):
         return torch.logsumexp(self.per_component_log_likelihood(x), dim=1)
 
     def log_responsibilities(self, x, sampled_features=None):
-        # if sampled_features is None:
         comp_LLs = self.per_component_log_likelihood(x, sampled_features=sampled_features)
-        # else:
-        #     comp_LLs = self._per_component_log_likelihood_sampled_features(x, sampled_features)
         return comp_LLs - torch.logsumexp(comp_LLs, dim=1).reshape(-1, 1)
 
     def responsibilities(self, x, sampled_features=None):
@@ -74,8 +71,8 @@ class MFA(torch.nn.Module):
     def _small_sample_ppca(x, n_factors):
         # See https://stats.stackexchange.com/questions/134282/relationship-between-svd-and-pca-how-to-use-svd-to-perform-pca
         mu = torch.mean(x, dim=0)
-        # U, S, V = torch.svd(x - mu.reshape(1, -1))
-        U, S, V = np.linalg.svd( (x - mu.reshape(1, -1)).cpu().numpy(), full_matrices=False)
+        # U, S, V = torch.svd(x - mu.reshape(1, -1))    # torch svd is less memory-efficient
+        U, S, V = np.linalg.svd((x - mu.reshape(1, -1)).cpu().numpy(), full_matrices=False)
         V = torch.from_numpy(V.T).cuda()
         S = torch.from_numpy(S).cuda()
         sigma_squared = torch.sum(torch.pow(S[n_factors:], 2.0))/((x.shape[0]-1) * (x.shape[1]-n_factors))
@@ -105,18 +102,21 @@ class MFA(torch.nn.Module):
         assert torch.all(torch.abs(self.A) < 10.0), torch.max(torch.abs(self.A))
         assert torch.all(torch.abs(self.MU) < 1.0), torch.max(torch.abs(self.MU))
 
-    def fit(self, x, max_iterations=20):
+    def fit(self, x, max_iterations=20, responsibility_sampling=False):
         """
-        Estimates Maximum Likelihood MPPCA parameters for the provided data using EM
-        :param x:
-        :param max_iterations:
-        :return:
+        Estimate Maximum Likelihood MPPCA parameters for the provided data using EM per
+        Tipping, and Bishop. Mixtures of probabilistic principal component analyzers.
+        :param x: training data (arranged in rows), shape = (<numbr of samples>, n_features)
+        :param max_iterations: number of iterations
+        :param responsibility_sampling: allows faster responsibility calculation by sampling data coordinates
         """
+        assert not responsibility_sampling or type(responsibility_sampling) == float, 'set to desired sampling ratio'
         K, d, l = self.A.shape
         N = x.shape[0]
 
         print('Random init...')
         self._init_from_data(x, samples_per_component=(l+1)*2)
+        print('Init log-likelihood =', round(torch.mean(self.log_prob(x)).item(), 1))
 
         def per_component_m_step(i):
             mu_i = torch.sum(r[:, [i]] * x, dim=0) / r_sum[i]
@@ -132,47 +132,50 @@ class MFA(torch.nn.Module):
             return mu_i, A_i_new, torch.sqrt(sigma_2_new) * torch.ones_like(self.D[i])
 
         for it in range(max_iterations):
-            r = self.responsibilities(x)
+            t = time.time()
+            sampled_features = np.random.choice(d, int(d*responsibility_sampling)) if responsibility_sampling else None
+            r = self.responsibilities(x, sampled_features=sampled_features)
             r_sum = torch.sum(r, dim=0)
-            if it%5 == 0:
-                print('Iteration {}: log_likelihood = {}'.format(it, torch.mean(self.log_prob(x))))
-            else:
-                print('Iteration {}'.format(it))
             new_params = [torch.stack(t) for t in zip(*[per_component_m_step(i) for i in range(K)])]
             self.MU.data = new_params[0]
             self.A.data = new_params[1]
             self.D.data = new_params[2]
             self.PI.data = r_sum / torch.sum(r_sum)
+            ll = round(torch.mean(self.log_prob(x)).item(), 1) if it % 5 == 0 else '.....'
+            print('Iteration {}/{}, train log-likelihood = {}, took {:.1f} sec'.format(it, max_iterations, ll,
+                                                                                   time.time()-t))
 
     def batch_fit(self, dataset: Dataset, batch_size=1000, max_iterations=20, responsibility_sampling=False):
         """
-        """
-        K, d, l = self.A.shape
-
-        """
-        Efficient mini-batch EM:
+        Estimate Maximum Likelihood MPPCA parameters for the provided data using EM per
+        Tipping, and Bishop. Mixtures of probabilistic principal component analyzers.
+        Memory-efficient batched implementation for large datasets that do not fit in memory:
         E step:
-            For all batches:
+            For all mini-batches:
             - Calculate and store responsibilities
-            - Accumulate sufficient statistics: responsibility-weighted means of x and of x(x^T A)
+            - Accumulate sufficient statistics
         M step: 
             Re-calculate all parameters
         Note that incremental EM per Neal & Hinton, 1998 is not supported, since we can't maintain
             the full x x^T as sufficient statistic - we need to multiply by A to get a more compact
             representation.
+        :param dataset: pytorch Dataset object containing the training data (will be iterated over)
+        :param batch_size: the batch size
+        :param max_iterations: number of iterations
+        :param responsibility_sampling: allows faster responsibility calculation by sampling data coordinates
        """
-        # Initial guess
+        assert not responsibility_sampling or type(responsibility_sampling) == float, 'set to desired sampling ratio'
+        K, d, l = self.A.shape
+
         print('Random init...')
         init_samples_per_component = (l+1)*2
         init_keys = [key for i, key in enumerate(RandomSampler(dataset)) if i < init_samples_per_component*K]
-        # init_keys = list(np.load('init_keys.npy'))
         init_samples, _ = zip(*[dataset[key] for key in init_keys])
         self._init_from_data(torch.stack(init_samples).cuda(), samples_per_component=init_samples_per_component)
 
-        all_keys = [key for key in SequentialSampler(dataset)]
-        N = len(all_keys)
         # Read some random samples for train-likelihood calculation
         test_samples, _ = zip(*[dataset[key] for key in RandomSampler(dataset, num_samples=batch_size, replacement=True)])
+        # all_keys = [key for key in SequentialSampler(dataset)]
         # test_samples, _ = zip(*[dataset[key] for key in all_keys[:batch_size*2]])
         test_samples = torch.stack(test_samples).cuda()
 
@@ -181,6 +184,7 @@ class MFA(torch.nn.Module):
         for it in range(max_iterations):
             t = time.time()
 
+            # Sufficient statistics
             sum_r = torch.zeros(size=[K], dtype=torch.float64, device=self.MU.device)
             sum_r_x = torch.zeros(size=[K, d], dtype=torch.float64, device=self.MU.device)
             sum_r_x_x_A = torch.zeros(size=[K, d, l], dtype=torch.float64, device=self.MU.device)
@@ -190,9 +194,9 @@ class MFA(torch.nn.Module):
             print('Iteration {}/{}, train log-likelihood={}:'.format(it, max_iterations, ll_log[-1]))
 
             for batch_x, _ in loader:
+                print('E', end='', flush=True)
                 batch_x = batch_x.cuda()
                 sampled_features = np.random.choice(d, int(d*responsibility_sampling)) if responsibility_sampling else None
-                print('E', end='', flush=True)
                 batch_r = self.responsibilities(batch_x, sampled_features=sampled_features)
                 sum_r += torch.sum(batch_r, dim=0).double()
                 sum_r_norm_x += torch.sum(batch_r * torch.sum(torch.pow(batch_x, 2.0), dim=1, keepdim=True), dim=0).double()
@@ -201,17 +205,15 @@ class MFA(torch.nn.Module):
                     sum_r_x[i] += torch.sum(batch_r_x, dim=0).double()
                     sum_r_x_x_A[i] += (batch_r_x.T @ (batch_x @ self.A[i])).double()
 
-            print('/M...', end='', flush=True)
+            print(' / M...', end='', flush=True)
             self.PI.data = (sum_r / torch.sum(sum_r)).float()
             self.MU.data = (sum_r_x / sum_r.reshape(-1, 1)).float()
             SA = sum_r_x_x_A / sum_r.reshape(-1, 1, 1) - \
                  (self.MU.reshape(K, d, 1) @ (self.MU.reshape(K, 1, d) @ self.A)).double()
             s2_I = torch.pow(self.D[:, 0], 2.0).reshape(K, 1, 1) * torch.eye(l, device=self.MU.device).reshape(1, l, l)
-            # inv_M = torch.inverse((self.A.transpose(1, 2) @ self.A + s2_I).double())   # (K, l, l)
             M = (self.A.transpose(1, 2) @ self.A + s2_I).double()
             inv_M = torch.stack([torch.inverse(M[i]) for i in range(K)])   # (K, l, l)
             invM_AT_S_A = inv_M @ self.A.double().transpose(1, 2) @ SA   # (K, l, l)
-            # self.A.data = (SA @ torch.inverse(s2_I.double() + invM_AT_S_A)).float()      # (K, d, l)
             self.A.data = torch.stack([(SA[i] @ torch.inverse(s2_I[i].double() + invM_AT_S_A[i])).float()
                                        for i in range(K)])
             t1 = torch.stack([torch.trace(self.A[i].double().T @ (SA[i] @ inv_M[i])) for i in range(K)])
@@ -309,37 +311,3 @@ class MFA(torch.nn.Module):
     #     print('\nFinal train log-likelihood={}:'.format(ll_log[-1]))
     #     return ll_log
     #
-
-# Some unit testing...
-if __name__ == '__main__':
-    mfa = MFA(2, 2, 1)
-    mfa.MU[0] = torch.FloatTensor([-1., 0.])
-    mfa.MU[1] = torch.FloatTensor([1., 0.])
-    mfa.A[0] = torch.FloatTensor([1.0/math.sqrt(2), 1.0/math.sqrt(2)]).reshape(2, 1)
-    mfa.A[1] = torch.FloatTensor([0., 1.]).reshape(2, 1)
-    mfa.D[0] = torch.FloatTensor([0.1, 0.1])
-    mfa.D[1] = torch.FloatTensor([0.2, 0.2])
-
-    # samples, labels = mfa.sample(10)
-    # log_probs = mfa.log_prob(samples)
-    # lls = mfa.per_component_log_likelihood(samples)
-    # r = mfa.responsibilities(samples)
-    # print(samples.shape, lls.shape, r.shape)
-    # print(log_probs)
-    # print(labels)
-    # print(lls[:, 0]-lls[:, 1])
-    # print(r)
-
-    samples, _ = mfa.sample(1000)
-    # samples = samples.numpy()
-    # plt.plot(samples[:, 0], samples[:, 1], '.', alpha=0.5)
-    # plt.show()
-
-    mfa2 = MFA(2, 2, 1)
-    mfa2.fit(samples)
-
-    samples, _ = mfa2.sample(1000)
-    samples = samples.cpu().numpy()
-    # plt.plot(samples[:, 0], samples[:, 1], '.', alpha=0.5)
-    # plt.show()
-

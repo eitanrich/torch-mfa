@@ -1,8 +1,6 @@
 import os
-import torch
 from torchvision.datasets import MNIST
 import torchvision.transforms as transforms
-import numpy as np
 from matplotlib import pyplot as plt
 from mfa import MFA
 from utils import ReshapeTransform, samples_to_mosaic
@@ -10,11 +8,11 @@ from imageio import imwrite
 
 model_dir = './models/mnist'
 
-trans = transforms.Compose([transforms.ToTensor(), ReshapeTransform([-1])])     # transforms.Normalize((0.5,), (0.5,))
+trans = transforms.Compose([transforms.ToTensor(), ReshapeTransform([-1])])
 train_set = MNIST(root='./data', train=True, transform=trans, download=True)
 
-for n_components in [20, 50, 100]:
-    for n_factors in [1, 6, 10]:
+for n_components in [50, 100]:
+    for n_factors in [6, 10]:
         for try_num in range(6):
             model = MFA(n_components=n_components, n_features=28*28, n_factors=n_factors)
             model.cuda()

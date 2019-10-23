@@ -1,40 +1,28 @@
+import os
 import torch
 from torchvision.datasets import MNIST
 from torch.utils.data import RandomSampler
 import torchvision.transforms as transforms
-import numpy as np
-from matplotlib import pyplot as plt
 from mfa import MFA
-import pickle as pkl
+from utils import ReshapeTransform, samples_to_mosaic
+from imageio import imwrite
 
-n_components = 50
-trans = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5,), (0.5,))])
+trans = transforms.Compose([transforms.ToTensor(), ReshapeTransform([-1])])
 train_set = MNIST(root='./data', train=True, transform=trans, download=True)
+
 print('Reading...')
-samples, labels = zip(*[train_set[id] for id in RandomSampler(train_set)])  # , replacement=True, num_samples=30000
+samples, labels = zip(*[train_set[id] for id in RandomSampler(train_set)])
 samples = torch.stack(samples)
-samples = samples.reshape(-1, 28*28)
-print(samples.shape, len(labels))
 
-mfa = MFA(n_components=n_components, n_features=28*28, n_factors=6)
-mfa.cuda()
+model = MFA(n_components=50, n_features=28*28, n_factors=6)
+model.cuda()
+
 print('Fitting using EM...')
-mfa.fit(samples.cuda(), max_iterations=30)
-print('Visualizing...')
-n = 1000
-rnd_samples, c_nums = mfa.sample(n, with_noise=False)
-rnd_samples = rnd_samples.cpu().numpy()
+model.fit(samples.cuda(), max_iterations=20)
 
-# pkl.dump((rnd_samples, c_nums), open('samples.pkl', 'wb'))
-# rnd_samples, c_nums = pkl.load(open('samples.pkl', 'rb'))
-
-rnd_samples = np.maximum(-0.2, np.minimum(1.2, rnd_samples))
-all_samples = []
-for c in range(n_components):
-    all_samples.append([rnd_samples[i].reshape([28, 28]) for i in range(n) if c_nums[i] == c])
-
-min_per_class = min([len(s) for s in all_samples])
-mosaic = np.vstack([np.hstack([all_samples[c][i] for i in range(min_per_class)]) for c in range(n_components)])
-plt.imshow(mosaic)
-plt.axis('off')
-plt.show()
+print('Generating new samples...')
+model_dir = './models/mnist'
+os.makedirs(model_dir, exist_ok=True)
+rnd_samples, _ = model.sample(400, with_noise=False)
+mosaic = samples_to_mosaic(rnd_samples.cpu().numpy(), image_shape=[28, 28])
+imwrite(os.path.join(model_dir, 'samples_full_data_EM.jpg'), mosaic)

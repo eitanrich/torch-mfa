@@ -1,41 +1,31 @@
+import os
 import torch
 from torchvision.datasets import ImageFolder
 from torch.utils.data import RandomSampler
 import torchvision.transforms as transforms
-import numpy as np
-from matplotlib import pyplot as plt
 from mfa import MFA
-import pickle as pkl
+from utils import ReshapeTransform, samples_to_mosaic
+from imageio import imwrite
 
-n_components = 100
-trans = transforms.Compose([transforms.Resize(64), transforms.ToTensor()])
+w = 64
+n_components = 200
+trans = transforms.Compose([transforms.Resize(w), transforms.ToTensor(), ReshapeTransform([-1])])
 train_set = ImageFolder(root='/mnt/local/eitanrich/PhD/Datasets/CelebA/cropped', transform=trans)
+
 print('Reading...')
-samples, labels = zip(*[train_set[id] for id in RandomSampler(train_set, replacement=True, num_samples=20000)])
+samples, labels = zip(*[train_set[id] for id in RandomSampler(train_set, replacement=True, num_samples=50000)])
 samples = torch.stack(samples)
 samples = samples.reshape(-1, 64*64*3)
-print(samples.shape, len(labels))
-#
-mfa = MFA(n_components=n_components, n_features=64*64*3, n_factors=10)
-mfa.cuda()
+
+model = MFA(n_components=n_components, n_features=64*64*3, n_factors=10)
+model.cuda()
 print('Fitting using EM...')
-mfa.fit(samples.cuda(), max_iterations=50)
+model.fit(samples.cuda(), max_iterations=20, responsibility_sampling=0.2)
 
-print('Visualizing...')
-n = 200
-rnd_samples, c_nums = mfa.sample(n, with_noise=False)
-rnd_samples = rnd_samples.cpu().numpy()
-
-# pkl.dump((rnd_samples, c_nums), open('samples.pkl', 'wb'))
-# rnd_samples, c_nums = pkl.load(open('samples.pkl', 'rb'))
-
-rnd_samples = np.maximum(-0.2, np.minimum(1.2, rnd_samples))
-all_samples = []
-for c in range(n_components):
-    all_samples.append([rnd_samples[i].reshape([3, 64, 64]).transpose([1, 2, 0]) for i in range(n) if c_nums[i] == c])
-
-min_per_class = min([len(s) for s in all_samples])
-mosaic = np.vstack([np.hstack([all_samples[c][i] for i in range(min_per_class)]) for c in range(n_components)])
-plt.imshow(mosaic)
-plt.axis('off')
-plt.show()
+print('Generating new samples...')
+model_dir = './models/celeba'
+os.makedirs(model_dir, exist_ok=True)
+rnd_samples, _ = model.sample(100, with_noise=False)
+rnd_samples = rnd_samples.cpu().numpy().reshape([-1, 3, w, w]).transpose([0, 2, 3, 1]).reshape([-1, w*w*3])
+mosaic = samples_to_mosaic(rnd_samples, image_shape=[w, w, 3])
+imwrite(os.path.join(model_dir, 'samples_full_data_EM.jpg'), mosaic)
