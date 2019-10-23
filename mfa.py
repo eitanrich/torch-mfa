@@ -73,8 +73,8 @@ class MFA(torch.nn.Module):
         mu = torch.mean(x, dim=0)
         # U, S, V = torch.svd(x - mu.reshape(1, -1))    # torch svd is less memory-efficient
         U, S, V = np.linalg.svd((x - mu.reshape(1, -1)).cpu().numpy(), full_matrices=False)
-        V = torch.from_numpy(V.T).cuda()
-        S = torch.from_numpy(S).cuda()
+        V = torch.from_numpy(V.T).to(x.device)
+        S = torch.from_numpy(S).to(x.device)
         sigma_squared = torch.sum(torch.pow(S[n_factors:], 2.0))/((x.shape[0]-1) * (x.shape[1]-n_factors))
         A = V[:, :n_factors] * torch.sqrt((torch.pow(S[:n_factors], 2.0).reshape(1, n_factors)/(x.shape[0]-1) - sigma_squared))
         return mu, A, torch.sqrt(sigma_squared) * torch.ones(x.shape[1], device=x.device)
@@ -171,13 +171,13 @@ class MFA(torch.nn.Module):
         init_samples_per_component = (l+1)*2
         init_keys = [key for i, key in enumerate(RandomSampler(dataset)) if i < init_samples_per_component*K]
         init_samples, _ = zip(*[dataset[key] for key in init_keys])
-        self._init_from_data(torch.stack(init_samples).cuda(), samples_per_component=init_samples_per_component)
+        self._init_from_data(torch.stack(init_samples).to(self.MU.device), samples_per_component=init_samples_per_component)
 
         # Read some random samples for train-likelihood calculation
         test_samples, _ = zip(*[dataset[key] for key in RandomSampler(dataset, num_samples=batch_size, replacement=True)])
         # all_keys = [key for key in SequentialSampler(dataset)]
         # test_samples, _ = zip(*[dataset[key] for key in all_keys[:batch_size*2]])
-        test_samples = torch.stack(test_samples).cuda()
+        test_samples = torch.stack(test_samples).to(self.MU.device)
 
         ll_log = []
         loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=8)
@@ -195,7 +195,7 @@ class MFA(torch.nn.Module):
 
             for batch_x, _ in loader:
                 print('E', end='', flush=True)
-                batch_x = batch_x.cuda()
+                batch_x = batch_x.to(self.MU.device)
                 sampled_features = np.random.choice(d, int(d*responsibility_sampling)) if responsibility_sampling else None
                 batch_r = self.responsibilities(batch_x, sampled_features=sampled_features)
                 sum_r += torch.sum(batch_r, dim=0).double()
