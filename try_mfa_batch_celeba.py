@@ -11,6 +11,7 @@ from matplotlib import pyplot as plt
 from imageio import imwrite
 
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+
 w = 64
 model_dir = './models/celeba'
 trans = transforms.Compose([transforms.Resize(w), transforms.ToTensor(), ReshapeTransform([-1])])

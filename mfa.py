@@ -60,12 +60,40 @@ class MFA(torch.nn.Module):
     def log_prob(self, x):
         return torch.logsumexp(self.per_component_log_likelihood(x), dim=1)
 
+    def log_likelihood(self, x):
+        return self.log_prob(x)
+
     def log_responsibilities(self, x, sampled_features=None):
         comp_LLs = self.per_component_log_likelihood(x, sampled_features=sampled_features)
         return comp_LLs - torch.logsumexp(comp_LLs, dim=1).reshape(-1, 1)
 
     def responsibilities(self, x, sampled_features=None):
         return torch.exp(self.log_responsibilities(x, sampled_features))
+
+    def map_component(self, x):
+        """
+        Get the Maximum a Posteriori component numbers
+        """
+        return torch.argmax(self.log_responsibilities(x), dim=1)
+
+    def reconstruct(self, x):
+        """
+        Reconstruct samples from the model - find the MAP component and latent z for each sample and regenerate
+        """
+        K, d, l = self.A.shape
+        AT = self.A.transpose(1, 2)
+        iD = torch.pow(self.D, -2.0).view(K, d, 1)
+        L = torch.eye(l, device=self.MU.device).reshape(1, l, l) + AT @ (iD*self.A)
+        iL = torch.inverse(L)
+
+        c_i = self.map_component(x)
+        x_c = (x - self.MU[c_i]).reshape(-1, d, 1)
+        iD_c = iD[c_i].reshape(-1, d, 1)
+        m_d_1 = (iD_c * x_c) - ((iD_c * self.A[c_i]) @ iL[c_i]) @ (AT[c_i] @ (iD_c * x_c))
+        mu_z = AT[c_i] @ m_d_1
+
+        x_hat = self.A[c_i] @ mu_z + self.MU[c_i].reshape(-1, d, 1)
+        return x_hat
 
     @staticmethod
     def _small_sample_ppca(x, n_factors):
