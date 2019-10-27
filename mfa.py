@@ -70,30 +70,36 @@ class MFA(torch.nn.Module):
     def responsibilities(self, x, sampled_features=None):
         return torch.exp(self.log_responsibilities(x, sampled_features))
 
-    def map_component(self, x):
+    def map_component(self, x, sampled_features=None):
         """
         Get the Maximum a Posteriori component numbers
         """
-        return torch.argmax(self.log_responsibilities(x), dim=1)
+        return torch.argmax(self.log_responsibilities(x, sampled_features), dim=1)
 
-    def reconstruct(self, x):
+    def reconstruct(self, full_x, sampled_features=None):
         """
         Reconstruct samples from the model - find the MAP component and latent z for each sample and regenerate
         """
         K, d, l = self.A.shape
-        AT = self.A.transpose(1, 2)
-        iD = torch.pow(self.D, -2.0).view(K, d, 1)
-        L = torch.eye(l, device=self.MU.device).reshape(1, l, l) + AT @ (iD*self.A)
+        c_i = self.map_component(full_x, sampled_features)
+
+        used_features = sampled_features if sampled_features is not None else torch.arange(0, d)
+        x = full_x[:, used_features]
+        MU = self.MU[:, used_features]
+        A = self.A[:, used_features]
+        D = self.D[:, used_features]
+        AT = A.transpose(1, 2)
+        iD = torch.pow(D, -2.0).unsqueeze(2)
+        L = torch.eye(l, device=MU.device).reshape(1, l, l) + AT @ (iD*A)
         iL = torch.inverse(L)
 
-        c_i = self.map_component(x)
-        x_c = (x - self.MU[c_i]).reshape(-1, d, 1)
-        iD_c = iD[c_i].reshape(-1, d, 1)
-        m_d_1 = (iD_c * x_c) - ((iD_c * self.A[c_i]) @ iL[c_i]) @ (AT[c_i] @ (iD_c * x_c))
+        # per eq. 2 in Ghahramani and Hinton 1996 + the matrix inversion lemma (also described there).
+        x_c = (x - MU[c_i]).unsqueeze(2)
+        iD_c = iD[c_i]
+        m_d_1 = (iD_c * x_c) - ((iD_c * A[c_i]) @ iL[c_i]) @ (AT[c_i] @ (iD_c * x_c))
         mu_z = AT[c_i] @ m_d_1
-
-        x_hat = self.A[c_i] @ mu_z + self.MU[c_i].reshape(-1, d, 1)
-        return x_hat
+        # TODO: per Tipping and Bishop 1999, eq. 16, the optimal reconstruction is not the below.
+        return self.A[c_i] @ mu_z + self.MU[c_i].unsqueeze(2)
 
     @staticmethod
     def _small_sample_ppca(x, n_factors):

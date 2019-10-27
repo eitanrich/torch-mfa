@@ -1,5 +1,6 @@
 import os
 import torch
+import numpy as np
 from torchvision.datasets import ImageFolder
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader, BatchSampler, SequentialSampler, RandomSampler
@@ -14,13 +15,13 @@ device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cp
 
 w = 64
 model_dir = './models/celeba'
-n_components = 200
+n_components = 800
 n_factors = 10
 batch_size = 128
 
 # Load a trained model
 model = MFA(n_components=n_components, n_features=w*w*3, n_factors=n_factors).to(device=device)
-model.load_state_dict(torch.load(os.path.join(model_dir, 'model.pth')))
+model.load_state_dict(torch.load(os.path.join(model_dir, 'model_c_800_l_10.pth')))
 
 
 # Sampling from the model - generating new images
@@ -50,16 +51,31 @@ dataset = ImageFolder(root='/mnt/local/eitanrich/PhD/Datasets/CelebA/cropped', t
 
 # Reconstruction from the model
 random_samples, _ = zip(*[dataset[k] for k in RandomSampler(dataset, replacement=True, num_samples=100)])
-random_samples = torch.stack(random_samples).to(device)
+random_samples = torch.stack(random_samples)
 
-# TODO: Get most-likely component and MAP of P(z|x)
-reconstructed_samples = model.reconstruct(random_samples)
+inpainting = True
+if inpainting:
+    # Hide part of each image
+    mask = np.ones([3, w, w], dtype=np.float32)
+    mask[:, :, w//2:w*3//4] = 0
+    mask = mask.flatten()
+    original_full_samples = random_samples.clone()
+    random_samples *= torch.from_numpy(mask).reshape([1, -1])
+    used_features = np.nonzero(mask)[0]
+else:
+    used_features = None
+
+reconstructed_samples = model.reconstruct(random_samples.to(device), sampled_features=used_features)
 reconstructed_samples = reconstructed_samples.cpu().numpy().reshape([-1, 3, w, w]).transpose([0, 2, 3, 1]).reshape([-1, w*w*3])
 
-original_samples = random_samples.cpu().numpy().reshape([-1, 3, w, w]).transpose([0, 2, 3, 1]).reshape([-1, w*w*3])
+original_samples = random_samples.numpy().reshape([-1, 3, w, w]).transpose([0, 2, 3, 1]).reshape([-1, w*w*3])
 mosaic_original = samples_to_mosaic(original_samples, image_shape=[w, w, 3])
 mosaic_recontructed = samples_to_mosaic(reconstructed_samples, image_shape=[w, w, 3])
+imwrite(os.path.join('models/celeba/random_samples_original.jpg'), mosaic_original)
+imwrite(os.path.join('models/celeba/random_samples_reconstructed.jpg'), mosaic_recontructed)
 plt.imshow(mosaic_original)
 plt.figure()
 plt.imshow(mosaic_recontructed)
 plt.show()
+
+

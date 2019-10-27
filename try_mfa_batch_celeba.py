@@ -17,7 +17,7 @@ model_dir = './models/celeba'
 trans = transforms.Compose([transforms.Resize(w), transforms.ToTensor(), ReshapeTransform([-1])])
 train_set = ImageFolder(root='/mnt/local/eitanrich/PhD/Datasets/CelebA/cropped', transform=trans)
 
-for n_components in [200]:
+for n_components in [800]:
     for n_factors in [10]:
         for batch_size in [1000]:   #[1000, 10000]:
             for try_num in range(1):
@@ -27,6 +27,9 @@ for n_components in [200]:
                     n_components, n_factors, batch_size, try_num))
 
                 ll_log = model.batch_fit(train_set, batch_size=batch_size, max_iterations=10, responsibility_sampling=0.2)
+
+                print('Saving model...')
+                torch.save(model.state_dict(), os.path.join(model_dir, 'model_c_{}_l_{}.pth'.format(n_components, n_factors)))
 
                 plt.plot(ll_log, label='c{}_l{}_b{}'.format(n_components, n_factors, batch_size))
                 plt.grid(True)
