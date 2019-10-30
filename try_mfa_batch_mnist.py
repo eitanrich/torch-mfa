@@ -1,4 +1,5 @@
 import os
+import torch
 from torchvision.datasets import MNIST
 import torchvision.transforms as transforms
 from matplotlib import pyplot as plt
@@ -13,14 +14,15 @@ train_set = MNIST(root='./data', train=True, transform=trans, download=True)
 
 for n_components in [50, 100]:
     for n_factors in [6, 10]:
-        for try_num in range(6):
+        for try_num in range(1):
             model = MFA(n_components=n_components, n_features=28*28, n_factors=n_factors)
             model.cuda()
 
             print('EM fitting: {} components / {} factors / try {}...'.format(n_components, n_factors, try_num))
 
-            ll_log = model.batch_fit(train_set, max_iterations=30)
-
+            ll_log = model.batch_fit(train_set, max_iterations=10)
+            print('Saving model...')
+            torch.save(model.state_dict(), os.path.join(model_dir, 'model_c_{}_l_{}.pth'.format(n_components, n_factors)))
             plt.plot(ll_log)
             plt.grid(True)
             plt.pause(0.1)
