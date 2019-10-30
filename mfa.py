@@ -76,6 +76,38 @@ class MFA(torch.nn.Module):
         """
         return torch.argmax(self.log_responsibilities(x, sampled_features), dim=1)
 
+    def conditional_reconstruct(self, full_x, observed_features):
+        """
+        Calculates the mean of the conditional probability P(x_h | x_o)
+        :param full_x: the full vectors (inclusing the hidden coordinates, which can contain any values)
+        :param observed_features: tensor containing a list of the observed coordinates of x
+        :return: A cloned version of full_x with the hidden features reconstructed
+
+        References:
+        https://www.math.uwaterloo.ca/~hwolkowi/matrixcookbook.pdf#subsubsection.8.1.3
+        https://en.wikipedia.org/wiki/Woodbury_matrix_identity
+        Note: This is equivalent to calling reconstruct with sampled_features
+        """
+        assert observed_features is not None
+        K, d, l = self.A.shape
+        c_i = self.map_component(full_x, observed_features)
+
+        mask = torch.zeros(d, dtype=bool)
+        mask[observed_features] = True
+
+        A_a = self.A[c_i][:, ~mask, :]
+        A_b = self.A[c_i][:, mask, :]
+        MU_a = self.MU[c_i][:, ~mask]
+        MU_b = self.MU[c_i][:, mask]
+        iD_b = torch.pow(self.D[c_i][:, mask], -2.0).unsqueeze(2)
+
+        iL_b = torch.inverse(torch.eye(l, device=MU_b.device).reshape(1, l, l) + A_b.transpose(1, 2) @ (iD_b*A_b))
+        x_b_l = ((A_b * iD_b).transpose(1,2) @ (full_x[:, mask] - MU_b).unsqueeze(2))
+        x_hat = full_x.clone()
+        x_hat[:, ~mask] =  (MU_a.unsqueeze(2) + A_a @ x_b_l - A_a @ (A_b.transpose(1, 2) @
+                                                                     (iD_b * (A_b @ iL_b @ x_b_l)))).squeeze(dim=2)
+        return x_hat
+
     def reconstruct(self, full_x, sampled_features=None):
         """
         Reconstruct samples from the model - find the MAP component and latent z for each sample and regenerate
@@ -99,7 +131,7 @@ class MFA(torch.nn.Module):
         m_d_1 = (iD_c * x_c) - ((iD_c * A[c_i]) @ iL[c_i]) @ (AT[c_i] @ (iD_c * x_c))
         mu_z = AT[c_i] @ m_d_1
         # TODO: per Tipping and Bishop 1999, eq. 16, the optimal reconstruction is not the below.
-        return self.A[c_i] @ mu_z + self.MU[c_i].unsqueeze(2)
+        return (self.A[c_i] @ mu_z).reshape(-1, d) + self.MU[c_i]
 
     @staticmethod
     def _small_sample_ppca(x, n_factors):

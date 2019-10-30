@@ -58,15 +58,18 @@ if inpainting:
     # Hide part of each image
     mask = np.ones([3, w, w], dtype=np.float32)
     mask[:, :, w//2:w*3//4] = 0
-    mask = mask.flatten()
+    mask = torch.from_numpy(mask.flatten()).reshape([1, -1])
     original_full_samples = random_samples.clone()
-    random_samples *= torch.from_numpy(mask).reshape([1, -1])
-    used_features = np.nonzero(mask)[0]
+    random_samples *= mask
+    used_features = torch.nonzero(mask.flatten()).flatten()
 else:
     used_features = None
 
-reconstructed_samples = model.reconstruct(random_samples.to(device), sampled_features=used_features)
-reconstructed_samples = reconstructed_samples.cpu().numpy().reshape([-1, 3, w, w]).transpose([0, 2, 3, 1]).reshape([-1, w*w*3])
+# reconstructed_samples = model.reconstruct(random_samples.to(device), sampled_features=used_features).cpu()
+reconstructed_samples = model.conditional_reconstruct(random_samples.to(device), observed_features=used_features).cpu()
+if inpainting:
+    reconstructed_samples = random_samples * mask + reconstructed_samples * (1 - mask)
+reconstructed_samples = reconstructed_samples.numpy().reshape([-1, 3, w, w]).transpose([0, 2, 3, 1]).reshape([-1, w*w*3])
 
 original_samples = random_samples.numpy().reshape([-1, 3, w, w]).transpose([0, 2, 3, 1]).reshape([-1, w*w*3])
 mosaic_original = samples_to_mosaic(original_samples, image_shape=[w, w, 3])
