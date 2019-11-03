@@ -1,14 +1,58 @@
 import numpy as np
 import torch
-from torch.distributions import multinomial
 from torch.utils.data import Dataset, DataLoader
-from torch.utils.data import RandomSampler, SequentialSampler, BatchSampler
+from torch.utils.data import RandomSampler, SequentialSampler
 import time
 import math
 import warnings
 
 
 class MFA(torch.nn.Module):
+    """
+    A class representing a Mixture of Factor Analyzers [1] / Mixture of Probabilistic PCA [2] in pytorch.
+    MFA/MPPCA are Gaussian Mixture Models with low-rank-plus-diagonal covariance, enabling efficient modeling
+    of high-dimensional domains in which the data resoides near lower-dimensional subspaces.
+    The implementation is based on [3] (please quote this if you are using this package in your research).
+
+    Attributes (model parameters):
+    ------------------------------
+    MU: Tensor shaped [n_components, n_features]
+        The component means.
+    A: Tensor shaped [n_components, n_features, n_factors]
+        The component subspace directions / factor loadings. These should be orthogonal (but not orthonormal)
+    lod_D: Tensor shaped [n_components, n_features]
+        Log of the component diagonal variance values. Note that in MPPCA, all values along the diagonal are the same.
+    PI_logits: Tensor shaped [n_components]
+        Log of the component mixing-coefficients (probabilities). Apply softmax to get the actual PI values.
+
+    Main Methods:
+    -------------
+    fit:
+        Fit the MPPCA model parameters to pre-loaded training data using EM
+
+    batch_fit:
+        Fit the MPPCA model parameters to a (possibly large) pytorch dataset using EM in batches
+
+    sample:
+        Generate new samples from the trained model
+
+    per_component_log_likelihood, log_prob, log_likelihood:
+        Probability query methods
+
+    responsibilities, log_responsibilities, map_component:
+        Responsibility (which component the sample comes from) query methods
+
+    reconstruct, conditional_reconstruct:
+        Reconstruction and in-painting
+
+    [1] Tipping, Michael E., and Christopher M. Bishop. "Mixtures of probabilistic principal component analyzers."
+        Neural computation 11.2 (1999): 443-482.
+    [2] Ghahramani, Zoubin, and Geoffrey E. Hinton. "The EM algorithm for mixtures of factor analyzers."
+        Vol. 60. Technical Report CRG-TR-96-1, University of Toronto, 1996.
+    [3] Richardson, Eitan, and Yair Weiss. "On gans and gmms."
+        Advances in Neural Information Processing Systems. 2018.
+
+    """
     def __init__(self, n_components, n_features, n_factors, isotropic_noise=True, init_method='rnd_samples'):
         super(MFA, self).__init__()
         self.n_components = n_components
@@ -22,7 +66,16 @@ class MFA(torch.nn.Module):
         self.log_D = torch.nn.Parameter(torch.zeros(n_components, n_features), requires_grad=False)
         self.PI_logits = torch.nn.Parameter(torch.log(torch.ones(n_components)/float(n_components)), requires_grad=False)
 
-    def sample(self, n, with_noise=True):
+    def sample(self, n, with_noise=False):
+        """
+        Generate random samples from the trained MFA / MPPCA
+        :param n: How many samples
+        :param with_noise: Add the isotropic / diagonal noise to the generated samples
+        :return: samples [n, n_features], c_nums - originating component numbers
+        """
+        if torch.all(self.A == 0.):
+            warnings.warn('SGD MFA training requires initialization. Please call batch_fit() first.')
+
         K, d, l = self.A.shape
         c_nums = np.random.choice(K, n, p=torch.softmax(self.PI_logits, dim=0).detach().cpu().numpy())
         z_l = torch.randn(n, l, device=self.A.device)
@@ -30,14 +83,6 @@ class MFA(torch.nn.Module):
         samples = torch.stack([self.A[c_nums[i]] @ z_l[i] + self.MU[c_nums[i]] + z_d[i] * torch.exp(0.5*self.log_D[c_nums[i]])
                                for i in range(n)])
         return samples, c_nums
-
-    def per_component_log_likelihood(self, x, sampled_features=None):
-        if sampled_features is not None:
-            return MFA._component_log_likelihood(x[:, sampled_features], torch.softmax(self.PI_logits, dim=0),
-                                                     self.MU[:, sampled_features],
-                                                     self.A[:, sampled_features],
-                                                     self.log_D[:, sampled_features])
-        return MFA._component_log_likelihood(x, torch.softmax(self.PI_logits, dim=0), self.MU, self.A, self.log_D)
 
     @staticmethod
     def _component_log_likelihood(x, PI, MU, A, log_D):
@@ -58,36 +103,78 @@ class MFA(torch.nn.Module):
         log_prob_data_given_components = -0.5 * ((d*np.log(2.0*math.pi) + log_det_Sigma).reshape(K, 1) + m_d)
         return PI.reshape(1, K) + log_prob_data_given_components.T
 
+    def per_component_log_likelihood(self, x, sampled_features=None):
+        """
+        Calculate per-sample and per-component log-likelihood values
+        :param x: samples [n, n_features]
+        :param sampled_features: list of feature coordinates to use
+        :return: log-probability values [n, n_components]
+        """
+        if sampled_features is not None:
+            return MFA._component_log_likelihood(x[:, sampled_features], torch.softmax(self.PI_logits, dim=0),
+                                                 self.MU[:, sampled_features],
+                                                 self.A[:, sampled_features],
+                                                 self.log_D[:, sampled_features])
+        return MFA._component_log_likelihood(x, torch.softmax(self.PI_logits, dim=0), self.MU, self.A, self.log_D)
+
     def log_prob(self, x, sampled_features=None):
+        """
+        Calculate per-sample log-probability values
+        :param x: samples [n, n_features]
+        :param sampled_features: list of feature coordinates to use
+        :return: log-probability values [n]
+        """
         return torch.logsumexp(self.per_component_log_likelihood(x, sampled_features), dim=1)
 
     def log_likelihood(self, x, sampled_features=None):
+        """
+        Calculate the log-likelihood of the given data
+        :param x: samples [n, n_features]
+        :param sampled_features: list of feature coordinates to use
+        :return: (total) log-likelihood value
+        """
         return torch.sum(self.log_prob(x, sampled_features))
 
     def log_responsibilities(self, x, sampled_features=None):
+        """
+        Calculate the log-responsibilities (log of the responsibility values - probability of each sample to originate
+        from each of the component.
+        :param x: samples [n, n_features]
+        :param sampled_features: list of feature coordinates to use
+        :return: log-responsibilities values [n, n_components]
+        """
         comp_LLs = self.per_component_log_likelihood(x, sampled_features)
         return comp_LLs - torch.logsumexp(comp_LLs, dim=1).reshape(-1, 1)
 
     def responsibilities(self, x, sampled_features=None):
+        """
+        Calculate the responsibilities - probability of each sample to originate from each of the component.
+        :param x: samples [n, n_features]
+        :param sampled_features: list of feature coordinates to use
+        :return: responsibility values [n, n_components]
+        """
         return torch.exp(self.log_responsibilities(x, sampled_features))
 
     def map_component(self, x, sampled_features=None):
         """
         Get the Maximum a Posteriori component numbers
+        :param x: samples [n, n_features]
+        :param sampled_features: list of feature coordinates to use
+        :return: component numbers [n]
         """
         return torch.argmax(self.log_responsibilities(x, sampled_features), dim=1)
 
     def conditional_reconstruct(self, full_x, observed_features):
         """
         Calculates the mean of the conditional probability P(x_h | x_o)
-        :param full_x: the full vectors (inclusing the hidden coordinates, which can contain any values)
-        :param observed_features: tensor containing a list of the observed coordinates of x
-        :return: A cloned version of full_x with the hidden features reconstructed
-
         References:
         https://www.math.uwaterloo.ca/~hwolkowi/matrixcookbook.pdf#subsubsection.8.1.3
         https://en.wikipedia.org/wiki/Woodbury_matrix_identity
         Note: This is equivalent to calling reconstruct with sampled_features
+
+        :param full_x: the full vectors (including the hidden coordinates, which can contain any values)
+        :param observed_features: tensor containing a list of the observed coordinates of x
+        :return: A cloned version of full_x with the hidden features reconstructed
         """
         assert observed_features is not None
         K, d, l = self.A.shape
@@ -109,14 +196,18 @@ class MFA(torch.nn.Module):
                                                                      (iD_b * (A_b @ iL_b @ x_b_l)))).squeeze(dim=2)
         return x_hat
 
-    def reconstruct(self, full_x, sampled_features=None):
+    def reconstruct(self, full_x, observed_features=None):
         """
         Reconstruct samples from the model - find the MAP component and latent z for each sample and regenerate
+
+        :param full_x: the full vectors (including the hidden coordinates, which can contain any values)
+        :param observed_features: tensor containing a list of the observed coordinates of x
+        :return: Reconstruction of full_x based on the trained model and observed features
         """
         K, d, l = self.A.shape
         c_i = self.map_component(full_x, sampled_features)
 
-        used_features = sampled_features if sampled_features is not None else torch.arange(0, d)
+        used_features = observed_features if observed_features is not None else torch.arange(0, d)
         x = full_x[:, used_features]
         MU = self.MU[:, used_features]
         A = self.A[:, used_features]
@@ -212,7 +303,8 @@ class MFA(torch.nn.Module):
             print('Iteration {}/{}, train log-likelihood = {}, took {:.1f} sec'.format(it, max_iterations, ll,
                                                                                    time.time()-t))
 
-    def batch_fit(self, dataset: Dataset, batch_size=1000, test_size=1000, max_iterations=20, responsibility_sampling=False):
+    def batch_fit(self, train_dataset, test_dataset=None, batch_size=1000, test_size=1000, max_iterations=20,
+                  responsibility_sampling=False):
         """
         Estimate Maximum Likelihood MPPCA parameters for the provided data using EM per
         Tipping, and Bishop. Mixtures of probabilistic principal component analyzers.
@@ -226,9 +318,11 @@ class MFA(torch.nn.Module):
         Note that incremental EM per Neal & Hinton, 1998 is not supported, since we can't maintain
             the full x x^T as sufficient statistic - we need to multiply by A to get a more compact
             representation.
-        :param dataset: pytorch Dataset object containing the training data (will be iterated over)
+        :param train_dataset: pytorch Dataset object containing the training data (will be iterated over)
+        :param test_dataset: optional pytorch Dataset object containing the test data (otherwise train_daset will be used)
         :param batch_size: the batch size
-        :param max_iterations: number of iterations
+        :param test_size: number of samples to use when reporting likelihood
+        :param max_iterations: number of iterations (=epochs)
         :param responsibility_sampling: allows faster responsibility calculation by sampling data coordinates
        """
         assert self.isotropic_noise, 'EM fitting is currently supported for isotropic noise (MPPCA) only'
@@ -237,18 +331,19 @@ class MFA(torch.nn.Module):
 
         print('Random init...')
         init_samples_per_component = (l+1)*2
-        init_keys = [key for i, key in enumerate(RandomSampler(dataset)) if i < init_samples_per_component*K]
-        init_samples, _ = zip(*[dataset[key] for key in init_keys])
+        init_keys = [key for i, key in enumerate(RandomSampler(train_dataset)) if i < init_samples_per_component*K]
+        init_samples, _ = zip(*[train_dataset[key] for key in init_keys])
         self._init_from_data(torch.stack(init_samples).to(self.MU.device), samples_per_component=init_samples_per_component)
 
-        # Read some random samples for train-likelihood calculation
-        # test_samples, _ = zip(*[dataset[key] for key in RandomSampler(dataset, num_samples=test_size, replacement=True)])
-        all_keys = [key for key in SequentialSampler(dataset)]
-        test_samples, _ = zip(*[dataset[key] for key in all_keys[:test_size]])
+        # Read some test samples for test likelihood calculation
+        # test_samples, _ = zip(*[test_dataset[key] for key in RandomSampler(test_dataset, num_samples=test_size, replacement=True)])
+        test_dataset = test_dataset or train_dataset
+        all_test_keys = [key for key in SequentialSampler(test_dataset)]
+        test_samples, _ = zip(*[test_dataset[key] for key in all_test_keys[:test_size]])
         test_samples = torch.stack(test_samples).to(self.MU.device)
 
         ll_log = []
-        loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=8)
+        loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=8)
         for it in range(max_iterations):
             t = time.time()
 
@@ -259,7 +354,7 @@ class MFA(torch.nn.Module):
             sum_r_norm_x = torch.zeros(K, dtype=torch.float64, device=self.MU.device)
 
             ll_log.append(torch.mean(self.log_prob(test_samples)).item())
-            print('Iteration {}/{}, train log-likelihood={}:'.format(it, max_iterations, ll_log[-1]))
+            print('Iteration {}/{}, log-likelihood={}:'.format(it, max_iterations, ll_log[-1]))
 
             for batch_x, _ in loader:
                 print('E', end='', flush=True)
@@ -296,6 +391,14 @@ class MFA(torch.nn.Module):
         return ll_log
 
     def sgd_mfa_train(self, dataset: Dataset, batch_size=128, test_size=1000, max_epochs=10, responsibility_sampling=False):
+        """
+        Stochastic Gradient Descent training of MFA (after initialization using MPPCA EM)
+        :param dataset: pytorch Dataset object containing the training data (will be iterated over)
+        :param batch_size: the batch size
+        :param test_size: number of samples to use when reporting likelihood
+        :param max_epochs: number of epochs
+        :param responsibility_sampling: allows faster responsibility calculation by sampling data coordinates
+        """
         if torch.all(self.A == 0.):
             warnings.warn('SGD MFA training requires initialization. Please call batch_fit() first.')
         if self.isotropic_noise:
