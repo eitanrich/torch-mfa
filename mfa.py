@@ -8,12 +8,13 @@ import math
 
 
 class MFA(torch.nn.Module):
-    def __init__(self, n_components, n_features, n_factors, init_method='rnd_samples'):
+    def __init__(self, n_components, n_features, n_factors, isotropic_noise=True, init_method='rnd_samples'):
         super(MFA, self).__init__()
         self.n_components = n_components
         self.n_features = n_features
         self.n_factors = n_factors
         self.init_method = init_method
+        self.isotropic_noise = isotropic_noise
 
         self.MU = torch.nn.Parameter(torch.zeros(n_components, n_features), requires_grad=False)
         self.A = torch.nn.Parameter(torch.zeros(n_components, n_features, n_factors), requires_grad=False)
@@ -174,6 +175,7 @@ class MFA(torch.nn.Module):
         :param max_iterations: number of iterations
         :param responsibility_sampling: allows faster responsibility calculation by sampling data coordinates
         """
+        assert self.isotropic_noise, 'EM fitting is currently supported for isotropic noise (MPPCA) only'
         assert not responsibility_sampling or type(responsibility_sampling) == float, 'set to desired sampling ratio'
         K, d, l = self.A.shape
         N = x.shape[0]
@@ -228,6 +230,7 @@ class MFA(torch.nn.Module):
         :param max_iterations: number of iterations
         :param responsibility_sampling: allows faster responsibility calculation by sampling data coordinates
        """
+        assert self.isotropic_noise, 'EM fitting is currently supported for isotropic noise (MPPCA) only'
         assert not responsibility_sampling or type(responsibility_sampling) == float, 'set to desired sampling ratio'
         K, d, l = self.A.shape
 
@@ -292,6 +295,8 @@ class MFA(torch.nn.Module):
         return ll_log
 
     def sgd_mfa_train(self, dataset: Dataset, batch_size=128, test_size=1000, max_epochs=10, responsibility_sampling=False):
+        assert not self.isotropic_noise, 'SGD training is for diagonal (non-isotropic) noise covariance'
+        assert not responsibility_sampling or type(responsibility_sampling) == float, 'set to desired sampling ratio'
         # self.PI_logits.requires_grad =
         self.MU.requires_grad = self.A.requires_grad = self.log_D.requires_grad = True
         K, d, l = self.A.shape
