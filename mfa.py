@@ -5,6 +5,7 @@ from torch.utils.data import Dataset, DataLoader
 from torch.utils.data import RandomSampler, SequentialSampler, BatchSampler
 import time
 import math
+import warnings
 
 
 class MFA(torch.nn.Module):
@@ -295,7 +296,10 @@ class MFA(torch.nn.Module):
         return ll_log
 
     def sgd_mfa_train(self, dataset: Dataset, batch_size=128, test_size=1000, max_epochs=10, responsibility_sampling=False):
-        assert not self.isotropic_noise, 'SGD training is for diagonal (non-isotropic) noise covariance'
+        if torch.all(self.A == 0.):
+            warnings.warn('SGD MFA training requires initialization. Please call batch_fit() first.')
+        if self.isotropic_noise:
+            warnings.warn('Currently, SGD training uses diagonal (non-isotropic) noise covariance i.e. MFA and not MPPCA')
         assert not responsibility_sampling or type(responsibility_sampling) == float, 'set to desired sampling ratio'
         # self.PI_logits.requires_grad =
         self.MU.requires_grad = self.A.requires_grad = self.log_D.requires_grad = True
