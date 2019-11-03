@@ -5,8 +5,7 @@ from torchvision.datasets import ImageFolder
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader, BatchSampler, SequentialSampler, RandomSampler
 from mfa import MFA
-from utils import ReshapeTransform, samples_to_mosaic
-import matplotlib
+from utils import *
 from matplotlib import pyplot as plt
 from imageio import imwrite
 from tqdm import tqdm
@@ -15,14 +14,18 @@ device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cp
 
 w = 64
 model_dir = './models/celeba'
-n_components = 800
+n_components = 100
 n_factors = 10
 batch_size = 128
 
 # Load a trained model
 model = MFA(n_components=n_components, n_features=w*w*3, n_factors=n_factors).to(device=device)
-model.load_state_dict(torch.load(os.path.join(model_dir, 'model_c_800_l_10.pth')))
+model.load_state_dict(torch.load(os.path.join(model_dir, 'model_mfa_sgd_c_100_l_10.pth')))
 
+image = visualize_model(model)
+plt.imshow(image)
+plt.axis('off')
+plt.show()
 
 # Sampling from the model - generating new images
 # rnd_samples, _ = model.sample(100, with_noise=False)
