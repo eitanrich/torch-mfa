@@ -20,7 +20,7 @@ if __name__ == "__main__":
     print('Preparing dataset and parameters for', dataset, '...')
     if dataset == 'celeba':
         image_shape = [64, 64, 3]       # The input image shape
-        n_components = 200              # Number of components in the mixture model
+        n_components = 300              # Number of components in the mixture model
         n_factors = 10                  # Number of factors - the latent dimension (same for all components)
         batch_size = 128                # The EM batch size
         num_iterations = 10             # Number of EM iterations (=epochs)
