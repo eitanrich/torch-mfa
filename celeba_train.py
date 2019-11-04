@@ -11,7 +11,7 @@ image_size = 64                 # The image width and height (assumed equal here
 n_components = 300              # Number of components in the mixture model
 n_factors = 10                  # Number of factors - the latent dimension (same for all components)
 batch_size = 1000               # The EM batch size
-num_iterations = 2             # Number of EM iterations (=epochs)
+num_iterations = 20             # Number of EM iterations (=epochs)
 responsibility_sampling = 0.2   # For faster responsibilities calculation, randomly sample the coordinates
 
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
