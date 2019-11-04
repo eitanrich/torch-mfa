@@ -42,6 +42,19 @@ Additional reading:
 
 `train.py` is an example script that fits a MPPCA model for CelebA and for MNIST.
 
+Random samples generated from a MPPCA model trained on CelebA:
+<img src="figures/celeba/samples_c_300_l_10.jpg"/>
+
+The test log-likelihood during training iterations:
+<img src="figures/celeba/training_graph_c_300_l_10.jpg"/>
+
 ## Inference
 
 `inference.py` is an example script for two inference tasks - likelihood evaluation and image reconstruction.
+
+Found outliers (strange-looking celebs...):
+<img src="figures/celeba/outliers.jpg"/>
+
+In-painting (right-half of each face is reconstructed from the observed left half):
+<img src="figures/celeba/original_samples.jpg"/>
+<img src="figures/celeba/reconstructed_samples.jpg"/>
