@@ -42,6 +42,8 @@ def main(argv):
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     model_dir = './models/'+dataset
     os.makedirs(model_dir, exist_ok=True)
+    figures_dir = './figures/'+dataset
+    os.makedirs(figures_dir, exist_ok=True)
 
     print('Defining the MFA model...')
     model = MFA(n_components=n_components, n_features=np.prod(image_shape), n_factors=n_factors).to(device=device)
@@ -62,17 +64,17 @@ def main(argv):
 
     print('Visualizing the trained model...')
     model_image = visualize_model(model, image_shape=image_shape, end_component=10)
-    imwrite(os.path.join(model_dir, 'model_c_{}_l_{}.jpg'.format(n_components, n_factors)), model_image)
+    imwrite(os.path.join(figures_dir, 'model_c_{}_l_{}.jpg'.format(n_components, n_factors)), model_image)
 
     print('Generating random samples...')
     rnd_samples, _ = model.sample(100, with_noise=False)
     mosaic = samples_to_mosaic(rnd_samples, image_shape=image_shape)
-    imwrite(os.path.join(model_dir, 'samples_c_{}_l_{}.jpg'.format(n_components, n_factors)), mosaic)
+    imwrite(os.path.join(figures_dir, 'samples_c_{}_l_{}.jpg'.format(n_components, n_factors)), mosaic)
 
     print('Plotting test log-likelihood graph...')
     plt.plot(ll_log, label='c{}_l{}_b{}'.format(n_components, n_factors, batch_size))
     plt.grid(True)
-    plt.savefig(os.path.join(model_dir, 'training_graph_c_{}_l_{}.jpg'.format(n_components, n_factors)))
+    plt.savefig(os.path.join(figures_dir, 'training_graph_c_{}_l_{}.jpg'.format(n_components, n_factors)))
     print('Done')
 
 if __name__ == "__main__":
