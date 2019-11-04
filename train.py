@@ -8,6 +8,10 @@ from utils import CropTransform, ReshapeTransform, samples_to_mosaic, visualize_
 from matplotlib import pyplot as plt
 from imageio import imwrite
 
+"""
+MFA model training (data fitting) example.
+Note that actual EM (and SGD) training code are part of the MFA class itself.
+"""
 
 def main(argv):
     dataset = argv[1] if len(argv) == 2 else 'celeba'

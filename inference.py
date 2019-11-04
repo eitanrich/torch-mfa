@@ -1,14 +1,15 @@
 import os
-import torch
-import numpy as np
 from torchvision.datasets import CelebA
 import torchvision.transforms as transforms
-from torch.utils.data import DataLoader, BatchSampler, SequentialSampler, RandomSampler
+from torch.utils.data import DataLoader, SequentialSampler, RandomSampler
 from mfa import MFA
 from utils import *
-from matplotlib import pyplot as plt
 from imageio import imwrite
 from tqdm import tqdm
+
+"""
+Examples for inference using the trained MFA model - likelihood evaluation and (conditional) reconstruction
+"""
 
 if __name__ == "__main__":
     dataset = 'celeba'
