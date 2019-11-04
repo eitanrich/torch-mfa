@@ -4,13 +4,14 @@ from torchvision.datasets import MNIST
 import torchvision.transforms as transforms
 from matplotlib import pyplot as plt
 from mfa import MFA
-from utils import ReshapeTransform, samples_to_mosaic
+from utils import ReshapeTransform, samples_to_mosaic, visualize_model
 from imageio import imwrite
 
 model_dir = './models/mnist'
 
 trans = transforms.Compose([transforms.ToTensor(), ReshapeTransform([-1])])
 train_set = MNIST(root='./data', train=True, transform=trans, download=True)
+test_set = MNIST(root='./data', train=False, transform=trans, download=True)
 
 for n_components in [50, 100]:
     for n_factors in [6, 10]:
@@ -20,16 +21,19 @@ for n_components in [50, 100]:
 
             print('EM fitting: {} components / {} factors / try {}...'.format(n_components, n_factors, try_num))
 
-            ll_log = model.batch_fit(train_set, max_iterations=10)
+            ll_log = model.batch_fit(train_set, test_set, max_iterations=10)
             print('Saving model...')
             torch.save(model.state_dict(), os.path.join(model_dir, 'model_c_{}_l_{}.pth'.format(n_components, n_factors)))
             plt.plot(ll_log)
             plt.grid(True)
             plt.pause(0.1)
             rnd_samples, _ = model.sample(400, with_noise=False)
-            mosaic = samples_to_mosaic(rnd_samples.cpu().numpy(), image_shape=[28, 28])
+            mosaic = samples_to_mosaic(rnd_samples, image_shape=[28, 28])
             imwrite(os.path.join(model_dir,
                                  'samples_c_{}_l_{}_try_{}.jpg'.format(n_components, n_factors, try_num)), mosaic)
+            model_image = visualize_model(model, image_shape=[28, 28], end_component=10)
+            imwrite(os.path.join(model_dir,
+                                 'model_c_{}_l_{}_try_{}.jpg'.format(n_components, n_factors, try_num)), model_image)
 
 print('Done')
 plt.show()
