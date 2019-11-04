@@ -1,22 +1,22 @@
 import os
 import torch
-from torchvision.datasets import ImageFolder
+from torchvision.datasets import CelebA
 import torchvision.transforms as transforms
 from mfa import MFA
-from utils import ReshapeTransform, samples_to_mosaic
+from utils import CropTransform, ReshapeTransform, samples_to_mosaic, visualize_model
 import matplotlib
 if os.name == 'posix' and "DISPLAY" not in os.environ:
     matplotlib.use('Agg')
 from matplotlib import pyplot as plt
 from imageio import imwrite
-from utils import samples_to_mosaic, visualize_model
 
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 w = 64
 model_dir = './models/celeba'
-trans = transforms.Compose([transforms.Resize(w), transforms.ToTensor(), ReshapeTransform([-1])])
-train_set = ImageFolder(root='/mnt/local/eitanrich/PhD/Datasets/CelebA/cropped', transform=trans)
+trans = transforms.Compose([CropTransform((25, 50, 25+128, 50+128)), transforms.Resize(w), transforms.ToTensor(),
+                            ReshapeTransform([-1])])
+train_set = CelebA(root='/mnt/local/eitanrich/PhD/Datasets/CelebA', transform=trans)
 
 for n_components in [100]:
     for n_factors in [10]:
@@ -27,7 +27,7 @@ for n_components in [100]:
                 print('EM fitting: {} components / {} factors / batch size {} / try {}...'.format(
                     n_components, n_factors, batch_size, try_num))
 
-                ll_log = model.batch_fit(train_set, batch_size=batch_size, max_iterations=4, responsibility_sampling=0.2)
+                ll_log = model.batch_fit(train_set, batch_size=batch_size, max_iterations=10, responsibility_sampling=0.2)
 
                 print('Saving model...')
                 torch.save(model.state_dict(), os.path.join(model_dir, 'model_c_{}_l_{}.pth'.format(n_components, n_factors)))

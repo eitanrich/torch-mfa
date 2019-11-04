@@ -2,12 +2,21 @@ import torch
 import numpy as np
 from mfa import MFA
 
+
 class ReshapeTransform:
     def __init__(self, new_size):
         self.new_size = new_size
 
     def __call__(self, img):
         return torch.reshape(img, self.new_size)
+
+
+class CropTransform:
+    def __init__(self, bbox):
+        self.bbox = bbox
+
+    def __call__(self, img):
+        return img.crop(self.bbox)
 
 
 def samples_to_np_images(samples, image_shape=[64, 64, 3], clamp=True):
