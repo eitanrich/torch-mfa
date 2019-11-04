@@ -8,11 +8,12 @@ from matplotlib import pyplot as plt
 from imageio import imwrite
 
 image_size = 64                 # The image width and height (assumed equal here)
-n_components = 300              # Number of components in the mixture model
+n_components = 200              # Number of components in the mixture model
 n_factors = 10                  # Number of factors - the latent dimension (same for all components)
 batch_size = 1000               # The EM batch size
 num_iterations = 20             # Number of EM iterations (=epochs)
-responsibility_sampling = 0.2   # For faster responsibilities calculation, randomly sample the coordinates
+responsibility_sampling = 0.2   # For faster responsibilities calculation, randomly sample the coordinates (or False)
+mfa_sgd_epochs = 0              # Perform additional training with diagonal (per-pixel) covariance, using SGD
 
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 model_dir = './models/celeba'
@@ -31,7 +32,14 @@ print('EM fitting: {} components / {} factors / batch size {} ...'.format(n_comp
 ll_log = model.batch_fit(train_set, test_set, batch_size=batch_size, max_iterations=num_iterations,
                          responsibility_sampling=responsibility_sampling)
 
-print('Saving model...')
+if mfa_sgd_epochs > 0:
+    print('Continuing training using SGD with diagonal (instead of isotropic) noise covariance...')
+    model.isotropic_noise = False
+    ll_log_sgd = model.sgd_mfa_train(train_set, test_size=256, max_epochs=mfa_sgd_epochs,
+                                     responsibility_sampling=responsibility_sampling)
+    ll_log += ll_log_sgd
+
+print('Saving the model...')
 torch.save(model.state_dict(), os.path.join(model_dir, 'model_c_{}_l_{}.pth'.format(n_components, n_factors)))
 
 print('Visualizing the trained model...')

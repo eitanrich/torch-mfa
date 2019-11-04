@@ -1,7 +1,6 @@
 import numpy as np
 import torch
-from torch.utils.data import Dataset, DataLoader
-from torch.utils.data import RandomSampler, SequentialSampler
+from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 import time
 import math
 import warnings
@@ -390,10 +389,12 @@ class MFA(torch.nn.Module):
         print('\nFinal train log-likelihood={}:'.format(ll_log[-1]))
         return ll_log
 
-    def sgd_mfa_train(self, dataset: Dataset, batch_size=128, test_size=1000, max_epochs=10, responsibility_sampling=False):
+    def sgd_mfa_train(self, train_dataset, test_dataset=None, batch_size=128, test_size=1000, max_epochs=10,
+                      learning_rate=0.001, responsibility_sampling=False):
         """
         Stochastic Gradient Descent training of MFA (after initialization using MPPCA EM)
-        :param dataset: pytorch Dataset object containing the training data (will be iterated over)
+        :param train_dataset: pytorch Dataset object containing the training data (will be iterated over)
+        :param test_dataset: optional pytorch Dataset object containing the test data (otherwise train_daset will be used)
         :param batch_size: the batch size
         :param test_size: number of samples to use when reporting likelihood
         :param max_epochs: number of epochs
@@ -408,12 +409,15 @@ class MFA(torch.nn.Module):
         self.MU.requires_grad = self.A.requires_grad = self.log_D.requires_grad = True
         K, d, l = self.A.shape
 
-        all_keys = [key for key in SequentialSampler(dataset)]
-        test_samples, _ = zip(*[dataset[key] for key in all_keys[:test_size]])
+        # Read some test samples for test likelihood calculation
+        # test_samples, _ = zip(*[test_dataset[key] for key in RandomSampler(test_dataset, num_samples=test_size, replacement=True)])
+        test_dataset = test_dataset or train_dataset
+        all_test_keys = [key for key in SequentialSampler(test_dataset)]
+        test_samples, _ = zip(*[test_dataset[key] for key in all_test_keys[:test_size]])
         test_samples = torch.stack(test_samples).to(self.MU.device)
 
-        optimizer = torch.optim.Adam(self.parameters(), lr=0.001)
-        loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=8)
+        optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
+        loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=8)
         ll_log = []
         self.train()
         for epoch in range(max_epochs):
