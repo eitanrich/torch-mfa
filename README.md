@@ -48,6 +48,9 @@ Random samples generated from a MPPCA model trained on CelebA:
 The test log-likelihood during training iterations:
 <img src="figures/celeba/training_graph_c_300_l_10.jpg"/>
 
+The first 10 learned components:
+<img src="figures/celeba/model_c_300_l_10.jpg"/>
+
 ## Inference
 
 `inference.py` is an example script for two inference tasks - likelihood evaluation and image reconstruction.
