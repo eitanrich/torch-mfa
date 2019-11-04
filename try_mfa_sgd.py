@@ -8,7 +8,7 @@ from mfa import MFA
 from utils import ReshapeTransform, samples_to_mosaic
 from imageio import imwrite
 
-dataset = 'celeba'
+dataset = 'mnist'
 
 print('Training for', dataset)
 model_dir = './models/' + dataset

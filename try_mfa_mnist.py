@@ -24,5 +24,5 @@ print('Generating new samples...')
 model_dir = './models/mnist'
 os.makedirs(model_dir, exist_ok=True)
 rnd_samples, _ = model.sample(400, with_noise=False)
-mosaic = samples_to_mosaic(rnd_samples.cpu().numpy(), image_shape=[28, 28])
+mosaic = samples_to_mosaic(rnd_samples, image_shape=[28, 28])
 imwrite(os.path.join(model_dir, 'samples_full_data_EM.jpg'), mosaic)
