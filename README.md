@@ -1,7 +1,7 @@
 # torch-mfa
 A pytorch library for fast training and inference of low-rank-plus-diagonal high-dimensional Gaussians Mixture Models.
 
-This is a pytorch re-implementation of the NeurIPS 2018 paper [On GANs and GMMs](https://arxiv.org/abs/1805.12462) by Eitan Richardson and Yair Weiss.
+This is a pytorch implementation based on the NeurIPS 2018 paper [On GANs and GMMs](https://arxiv.org/abs/1805.12462) by Eitan Richardson and Yair Weiss. The official TensorFlow code for reprodicing the paper results is [here](https://github.com/eitanrich/gans-n-gmms). This repository contains a faster (and cleaner) implementation of the MFA/MPPCA model with EM training.
 
 ### Why use MFA and MPPCA?
 GANs are a popular example for deep generative models that can model high-dimensional data (e.g. images) and generate very realistic new samples. However, such models have some disadvantages: adversarial training is not very stable, we don't know "what goes on inside them", it is not clear if they properly model the entire data distribution and they are not that good for different inference task, such as evaluating the likelihood of new samples and performing reconstruction.
@@ -32,7 +32,7 @@ Additional reading:
 
 ### Prerequisites
 
-- Python 3.x, pytorch
+- Python 3.x, pytorch >= 1.2.0
 
 ### Code structure
 
@@ -42,6 +42,31 @@ Additional reading:
 
 `train.py` is an example script that fits a MPPCA model for CelebA and for MNIST.
 
+Random samples generated from a MPPCA model trained on CelebA:
+<img src="figures/celeba/samples_c_300_l_10.jpg"/>
+
+The test log-likelihood during training iterations:
+<img src="figures/celeba/training_graph_c_300_l_10.jpg"/>
+
+The first 10 learned components:
+<img src="figures/celeba/model_c_300_l_10.jpg"/>
+
 ## Inference
 
 `inference.py` is an example script for two inference tasks - likelihood evaluation and image reconstruction.
+
+Found outliers (strange-looking celebs...):
+<img src="figures/celeba/outliers.jpg"/>
+
+In-painting (right-half of each face is reconstructed from the observed left half):
+<img src="figures/celeba/original_samples.jpg"/>
+<img src="figures/celeba/reconstructed_samples.jpg"/>
+
+## Citation
+<pre>@inproceedings{richardson2018gans,
+  title={On gans and gmms},
+  author={Richardson, Eitan and Weiss, Yair},
+  booktitle={Advances in Neural Information Processing Systems},
+  pages={5847--5858},
+  year={2018}
+}</pre>
