@@ -61,3 +61,12 @@ Found outliers (strange-looking celebs...):
 In-painting (right-half of each face is reconstructed from the observed left half):
 <img src="figures/celeba/original_samples.jpg"/>
 <img src="figures/celeba/reconstructed_samples.jpg"/>
+
+## Citation
+<pre>@inproceedings{richardson2018gans,
+  title={On gans and gmms},
+  author={Richardson, Eitan and Weiss, Yair},
+  booktitle={Advances in Neural Information Processing Systems},
+  pages={5847--5858},
+  year={2018}
+}</pre>
