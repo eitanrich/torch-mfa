@@ -32,7 +32,7 @@ Additional reading:
 
 ### Prerequisites
 
-- Python 3.x, pytorch
+- Python 3.x, pytorch >= 1.2.0
 
 ### Code structure
 
