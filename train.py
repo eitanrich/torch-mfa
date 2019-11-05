@@ -7,6 +7,7 @@ from mfa import MFA
 from utils import CropTransform, ReshapeTransform, samples_to_mosaic, visualize_model
 from matplotlib import pyplot as plt
 from imageio import imwrite
+from packaging import version
 
 """
 MFA model training (data fitting) example.
@@ -14,6 +15,8 @@ Note that actual EM (and SGD) training code are part of the MFA class itself.
 """
 
 def main(argv):
+    assert version.parse(torch.__version__) >= version.parse('1.2.0')
+
     dataset = argv[1] if len(argv) == 2 else 'celeba'
     print('Preparing dataset and parameters for', dataset, '...')
 
