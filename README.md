@@ -3,6 +3,12 @@ A pytorch library for fast training and inference of low-rank-plus-diagonal high
 
 This is a pytorch implementation based on the NeurIPS 2018 paper [On GANs and GMMs](https://arxiv.org/abs/1805.12462) by Eitan Richardson and Yair Weiss. The official TensorFlow code for reprodicing the paper results is [here](https://github.com/eitanrich/gans-n-gmms). This repository contains a faster (and cleaner) implementation of the MFA/MPPCA model with EM training.
 
+#### Changes from the official TensorFlow repository:
+- Main training method is EM instead of SGD
+- Inialization method is based on selecting random samples instead of K-means clustering
+- Currently, only MPPCA (not MFA) is supported. There is limited support for MFA via SGD (after MPPCA EM training).
+- The NDB evaluation method is not implemented yet
+
 ### Why use MFA and MPPCA?
 GANs are a popular example for deep generative models that can model high-dimensional data (e.g. images) and generate very realistic new samples. However, such models have some disadvantages: adversarial training is not very stable, we don't know "what goes on inside them", it is not clear if they properly model the entire data distribution and they are not that good for different inference task, such as evaluating the likelihood of new samples and performing reconstruction.
 
@@ -29,6 +35,8 @@ Additional reading:
 ### TODO:
 - [ ] Implement EM training for diagonal noise covariance (MFA) - currently only supported by SGD (less stable)
 - [ ] Improve stability of SGD training
+- [ ] K-means initialization option
+- [ ] Add NDB evaluation
 
 ### Prerequisites
 
