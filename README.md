@@ -5,7 +5,6 @@ This is a pytorch implementation based on the NeurIPS 2018 paper [On GANs and GM
 
 #### Changes from the official TensorFlow repository:
 - Main training method is EM instead of SGD
-- Inialization method is based on selecting random samples instead of K-means clustering
 - Currently, only MPPCA (not MFA) is supported. There is limited support for MFA via SGD (after MPPCA EM training).
 - The NDB evaluation method is not implemented yet
 
@@ -33,9 +32,9 @@ Additional reading:
 - [MFA paper](https://www.csie.ntu.edu.tw/~mhyang/course/u0030/papers/Mixture%20of%20Factor%20Analyzers.pdf)
 
 ### TODO:
+- [x] K-means initialization option
 - [ ] Implement EM training for diagonal noise covariance (MFA) - currently only supported by SGD (less stable)
 - [ ] Improve stability of SGD training
-- [ ] K-means initialization option
 - [ ] Add NDB evaluation
 
 ### Prerequisites
@@ -51,12 +50,15 @@ Additional reading:
 `train.py` is an example script that fits a MPPCA model for CelebA and for MNIST.
 
 Random samples generated from a MPPCA model trained on CelebA:
-<img src="figures/celeba/samples_c_300_l_10.jpg"/>
+
+<img src="figures/celeba/samples_c_300_l_10.jpg"  width="500" />
 
 The test log-likelihood during training iterations:
+
 <img src="figures/celeba/training_graph_c_300_l_10.jpg"/>
 
 The first 10 learned components:
+
 <img src="figures/celeba/model_c_300_l_10.jpg"/>
 
 ## Inference
@@ -64,11 +66,13 @@ The first 10 learned components:
 `inference.py` is an example script for two inference tasks - likelihood evaluation and image reconstruction.
 
 Found outliers (strange-looking celebs...):
-<img src="figures/celeba/outliers.jpg"/>
+
+<img src="figures/celeba/outliers.jpg"  width="500" />
 
 In-painting (right-half of each face is reconstructed from the observed left half):
-<img src="figures/celeba/original_samples.jpg"/>
-<img src="figures/celeba/reconstructed_samples.jpg"/>
+
+<img src="figures/celeba/original_samples.jpg"  width="500" />
+<img src="figures/celeba/reconstructed_samples.jpg"  width="500" />
 
 ## Citation
 <pre>@inproceedings{richardson2018gans,
