@@ -24,7 +24,7 @@ if __name__ == "__main__":
         n_factors = 10                  # Number of factors - the latent dimension (same for all components)
         batch_size = 128                # The EM batch size
         num_iterations = 10             # Number of EM iterations (=epochs)
-        responsibility_sampling = 0.2   # For faster responsibilities calculation, randomly sample the coordinates (or False)
+        feature_sampling = 0.2          # For faster responsibilities calculation, randomly sample the coordinates (or False)
         mfa_sgd_epochs = 0              # Perform additional training with diagonal (per-pixel) covariance, using SGD
         trans = transforms.Compose([CropTransform((25, 50, 25+128, 50+128)), transforms.Resize(image_shape[0]),
                                     transforms.ToTensor(),  ReshapeTransform([-1])])

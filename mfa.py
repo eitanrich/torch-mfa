@@ -204,7 +204,7 @@ class MFA(torch.nn.Module):
         :return: Reconstruction of full_x based on the trained model and observed features
         """
         K, d, l = self.A.shape
-        c_i = self.map_component(full_x, sampled_features)
+        c_i = self.map_component(full_x, observed_features)
 
         used_features = observed_features if observed_features is not None else torch.arange(0, d)
         x = full_x[:, used_features]
@@ -234,17 +234,30 @@ class MFA(torch.nn.Module):
         A = V[:, :n_factors] * torch.sqrt((torch.pow(S[:n_factors], 2.0).reshape(1, n_factors)/(x.shape[0]-1) - sigma_squared))
         return mu, A, torch.log(sigma_squared) * torch.ones(x.shape[1], device=x.device)
 
-    def _init_from_data(self, x, samples_per_component):
-        assert self.init_method == 'rnd_samples'
-
-        K = self.n_components
+    def _init_from_data(self, x, samples_per_component, feature_sampling=False):
         n = x.shape[0]
-        l = self.n_factors
-        m = samples_per_component
-        o = np.random.choice(n, m*K, replace=False) if m*K < n else np.arange(n)
-        assert n >= m*K
+        K, d, l = self.A.shape
+
+        if self.init_method == 'kmeans':
+            # Import this only if 'kmeans' method was selected (not sure this is a good practice...)
+            from sklearn.cluster import KMeans
+            sampled_features = np.random.choice(d, int(d*feature_sampling)) if feature_sampling else np.arange(d)
+
+            t = time.time()
+            print('Performing K-means clustering of {} samples in dimension {} to {} clusters...'.format(
+                x.shape[0], sampled_features.size, K))
+            _x = x[:, sampled_features].cpu().numpy()
+            clusters = KMeans(n_clusters=K, max_iter=300, n_jobs=-1).fit(_x)
+            print('... took {} sec'.format(time.time() - t))
+            component_samples = [clusters.labels_ == i for i in range(K)]
+        elif self.init_method == 'rnd_samples':
+            m = samples_per_component
+            o = np.random.choice(n, m*K, replace=False) if m*K < n else np.arange(n)
+            assert n >= m*K
+            component_samples = [[o[i*m:(i+1)*m]] for i in range(K)]
+
         params = [torch.stack(t) for t in zip(
-            *[MFA._small_sample_ppca(x[o[i*m:(i+1)*m]], n_factors=l) for i in range(K)])]
+            *[MFA._small_sample_ppca(x[component_samples[i]], n_factors=l) for i in range(K)])]
 
         self.MU.data = params[0]
         self.A.data = params[1]
@@ -258,21 +271,23 @@ class MFA(torch.nn.Module):
         assert torch.all(torch.abs(self.A) < 10.0), torch.max(torch.abs(self.A))
         assert torch.all(torch.abs(self.MU) < 1.0), torch.max(torch.abs(self.MU))
 
-    def fit(self, x, max_iterations=20, responsibility_sampling=False):
+    def fit(self, x, max_iterations=20, feature_sampling=False):
         """
         Estimate Maximum Likelihood MPPCA parameters for the provided data using EM per
         Tipping, and Bishop. Mixtures of probabilistic principal component analyzers.
         :param x: training data (arranged in rows), shape = (<numbr of samples>, n_features)
         :param max_iterations: number of iterations
-        :param responsibility_sampling: allows faster responsibility calculation by sampling data coordinates
+        :param feature_sampling: allows faster responsibility calculation by sampling data coordinates
         """
         assert self.isotropic_noise, 'EM fitting is currently supported for isotropic noise (MPPCA) only'
-        assert not responsibility_sampling or type(responsibility_sampling) == float, 'set to desired sampling ratio'
+        assert not feature_sampling or type(feature_sampling) == float, 'set to desired sampling ratio'
         K, d, l = self.A.shape
         N = x.shape[0]
 
         print('Random init...')
-        self._init_from_data(x, samples_per_component=(l+1)*2)
+        init_samples_per_component = (l+1)*2 if self.init_method == 'rnd_samples' else (l+1)*10
+        self._init_from_data(x, samples_per_component=init_samples_per_component,
+                             feature_sampling=feature_sampling/2 if feature_sampling else False)
         print('Init log-likelihood =', round(torch.mean(self.log_prob(x)).item(), 1))
 
         def per_component_m_step(i):
@@ -290,7 +305,7 @@ class MFA(torch.nn.Module):
 
         for it in range(max_iterations):
             t = time.time()
-            sampled_features = np.random.choice(d, int(d*responsibility_sampling)) if responsibility_sampling else None
+            sampled_features = np.random.choice(d, int(d*feature_sampling)) if feature_sampling else None
             r = self.responsibilities(x, sampled_features=sampled_features)
             r_sum = torch.sum(r, dim=0)
             new_params = [torch.stack(t) for t in zip(*[per_component_m_step(i) for i in range(K)])]
@@ -303,7 +318,7 @@ class MFA(torch.nn.Module):
                                                                                    time.time()-t))
 
     def batch_fit(self, train_dataset, test_dataset=None, batch_size=1000, test_size=1000, max_iterations=20,
-                  responsibility_sampling=False):
+                  feature_sampling=False):
         """
         Estimate Maximum Likelihood MPPCA parameters for the provided data using EM per
         Tipping, and Bishop. Mixtures of probabilistic principal component analyzers.
@@ -322,17 +337,19 @@ class MFA(torch.nn.Module):
         :param batch_size: the batch size
         :param test_size: number of samples to use when reporting likelihood
         :param max_iterations: number of iterations (=epochs)
-        :param responsibility_sampling: allows faster responsibility calculation by sampling data coordinates
+        :param feature_sampling: allows faster responsibility calculation by sampling data coordinates
        """
         assert self.isotropic_noise, 'EM fitting is currently supported for isotropic noise (MPPCA) only'
-        assert not responsibility_sampling or type(responsibility_sampling) == float, 'set to desired sampling ratio'
+        assert not feature_sampling or type(feature_sampling) == float, 'set to desired sampling ratio'
         K, d, l = self.A.shape
 
-        print('Random init...')
-        init_samples_per_component = (l+1)*2
+        init_samples_per_component = (l+1)*2 if self.init_method == 'rnd_samples' else (l+1)*10
+        print('Random init using {} with {} samples per component...'.format(self.init_method, init_samples_per_component))
         init_keys = [key for i, key in enumerate(RandomSampler(train_dataset)) if i < init_samples_per_component*K]
         init_samples, _ = zip(*[train_dataset[key] for key in init_keys])
-        self._init_from_data(torch.stack(init_samples).to(self.MU.device), samples_per_component=init_samples_per_component)
+        self._init_from_data(torch.stack(init_samples).to(self.MU.device),
+                             samples_per_component=init_samples_per_component,
+                             feature_sampling=feature_sampling/2 if feature_sampling else False)
 
         # Read some test samples for test likelihood calculation
         # test_samples, _ = zip(*[test_dataset[key] for key in RandomSampler(test_dataset, num_samples=test_size, replacement=True)])
@@ -358,7 +375,7 @@ class MFA(torch.nn.Module):
             for batch_x, _ in loader:
                 print('E', end='', flush=True)
                 batch_x = batch_x.to(self.MU.device)
-                sampled_features = np.random.choice(d, int(d*responsibility_sampling)) if responsibility_sampling else None
+                sampled_features = np.random.choice(d, int(d*feature_sampling)) if feature_sampling else None
                 batch_r = self.responsibilities(batch_x, sampled_features=sampled_features)
                 sum_r += torch.sum(batch_r, dim=0).double()
                 sum_r_norm_x += torch.sum(batch_r * torch.sum(torch.pow(batch_x, 2.0), dim=1, keepdim=True), dim=0).double()
@@ -390,7 +407,7 @@ class MFA(torch.nn.Module):
         return ll_log
 
     def sgd_mfa_train(self, train_dataset, test_dataset=None, batch_size=128, test_size=1000, max_epochs=10,
-                      learning_rate=0.001, responsibility_sampling=False):
+                      learning_rate=0.001, feature_sampling=False):
         """
         Stochastic Gradient Descent training of MFA (after initialization using MPPCA EM)
         :param train_dataset: pytorch Dataset object containing the training data (will be iterated over)
@@ -398,13 +415,13 @@ class MFA(torch.nn.Module):
         :param batch_size: the batch size
         :param test_size: number of samples to use when reporting likelihood
         :param max_epochs: number of epochs
-        :param responsibility_sampling: allows faster responsibility calculation by sampling data coordinates
+        :param feature_sampling: allows faster responsibility calculation by sampling data coordinates
         """
         if torch.all(self.A == 0.):
             warnings.warn('SGD MFA training requires initialization. Please call batch_fit() first.')
         if self.isotropic_noise:
             warnings.warn('Currently, SGD training uses diagonal (non-isotropic) noise covariance i.e. MFA and not MPPCA')
-        assert not responsibility_sampling or type(responsibility_sampling) == float, 'set to desired sampling ratio'
+        assert not feature_sampling or type(feature_sampling) == float, 'set to desired sampling ratio'
         # self.PI_logits.requires_grad =
         self.MU.requires_grad = self.A.requires_grad = self.log_D.requires_grad = True
         K, d, l = self.A.shape
@@ -426,7 +443,7 @@ class MFA(torch.nn.Module):
                 print('.', end='', flush=True)
                 if idx > 0 and idx%100 == 0:
                     print(torch.mean(self.log_prob(test_samples)).item())
-                sampled_features = np.random.choice(d, int(d*responsibility_sampling)) if responsibility_sampling else None
+                sampled_features = np.random.choice(d, int(d*feature_sampling)) if feature_sampling else None
                 batch_x = batch_x.to(self.MU.device)
                 optimizer.zero_grad()
                 loss = -self.log_likelihood(batch_x, sampled_features=sampled_features) / batch_size
